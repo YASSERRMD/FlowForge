@@ -90,3 +90,58 @@ func TestLoadProductionValid(t *testing.T) {
 		t.Errorf("Env = %q", cfg.Env)
 	}
 }
+
+func TestLoadDevAuthMode(t *testing.T) {
+	base := map[string]string{
+		"DATABASE_URL":   "postgres://flowforge:flowforge@localhost:5432/flowforge",
+		"REDIS_URL":      "redis://localhost:6379/0",
+		"SESSION_SECRET": "dev-only-insecure-secret-change-me",
+		"AUTH_DEV_MODE":  "true",
+	}
+	cfg, err := Load(envFunc(base))
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if !cfg.DevAuthEnabled {
+		t.Fatal("DevAuthEnabled = false, want true")
+	}
+
+	base["APP_ENV"] = "production"
+	base["SESSION_SECRET"] = strings.Repeat("x", 40)
+	if _, err := Load(envFunc(base)); err == nil ||
+		!strings.Contains(err.Error(), "AUTH_DEV_MODE") {
+		t.Fatalf("want AUTH_DEV_MODE production rejection, got %v", err)
+	}
+}
+
+func TestLoadHTTPTimeouts(t *testing.T) {
+	cfg, err := Load(envFunc(map[string]string{
+		"DATABASE_URL":          "postgres://flowforge:flowforge@localhost:5432/flowforge",
+		"REDIS_URL":             "redis://localhost:6379/0",
+		"SESSION_SECRET":        "dev-only-insecure-secret-change-me",
+		"HTTP_READ_TIMEOUT_MS":  "5000",
+		"HTTP_WRITE_TIMEOUT_MS": "9000",
+		"HTTP_MAX_BODY_KB":      "256",
+	}))
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	if cfg.ReadTimeout.Milliseconds() != 5000 {
+		t.Errorf("ReadTimeout = %v", cfg.ReadTimeout)
+	}
+	if cfg.WriteTimeout.Milliseconds() != 9000 {
+		t.Errorf("WriteTimeout = %v", cfg.WriteTimeout)
+	}
+	if cfg.MaxRequestBodyKB != 256 {
+		t.Errorf("MaxRequestBodyKB = %d", cfg.MaxRequestBodyKB)
+	}
+
+	if _, err := Load(envFunc(map[string]string{
+		"DATABASE_URL":         "postgres://flowforge:flowforge@localhost:5432/flowforge",
+		"REDIS_URL":            "redis://localhost:6379/0",
+		"SESSION_SECRET":       "dev-only-insecure-secret-change-me",
+		"HTTP_READ_TIMEOUT_MS": "5",
+	})); err == nil || !strings.Contains(err.Error(), "HTTP_READ_TIMEOUT_MS") {
+		t.Fatalf("want timeout validation error, got %v", err)
+	}
+}
