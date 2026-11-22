@@ -112,18 +112,21 @@ export function DataTable<T>({
           <TableHeader>
             <TableRow>
               {columns.map((col) => (
-                <TableHead key={col.id} className={col.className}>
+                <TableHead
+                  key={col.id}
+                  className={col.className}
+                  aria-sort={
+                    sort?.id === col.id
+                      ? sort.direction === "asc"
+                        ? "ascending"
+                        : "descending"
+                      : undefined
+                  }
+                >
                   {col.sortValue ? (
                     <button
                       type="button"
                       onClick={() => toggleSort(col.id)}
-                      aria-sort={
-                        sort?.id === col.id
-                          ? sort.direction === "asc"
-                            ? "ascending"
-                            : "descending"
-                          : undefined
-                      }
                       className={cn(
                         "inline-flex items-center gap-1 rounded-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                         sort?.id === col.id && "text-foreground",
