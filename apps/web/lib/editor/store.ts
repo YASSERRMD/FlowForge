@@ -38,6 +38,7 @@ interface EditorState {
   canConnect: (connection: Connection | FlowEdge, ignoreEdgeId?: string) => boolean;
   addNode: (kind: NodeKind, position: { x: number; y: number }) => FlowNode;
   updateNodeLabel: (id: string, label: string) => void;
+  updateNodeConfig: (id: string, patch: Record<string, unknown>) => void;
   deleteSelection: () => void;
   copySelection: () => void;
   pasteClipboard: () => void;
@@ -225,6 +226,19 @@ export const useEditorStore = create<EditorState>((set, get) => {
       set({
         nodes: get().nodes.map((n) =>
           n.id === id ? { ...n, data: { ...n.data, label } } : n,
+        ),
+      });
+    },
+
+    updateNodeConfig: (id, patch) => {
+      const target = get().nodes.find((n) => n.id === id);
+      if (!target) return;
+      checkpoint();
+      set({
+        nodes: get().nodes.map((n) =>
+          n.id === id
+            ? { ...n, data: { ...n.data, config: { ...n.data.config, ...patch } } }
+            : n,
         ),
       });
     },

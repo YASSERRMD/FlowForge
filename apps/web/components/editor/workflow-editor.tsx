@@ -16,6 +16,7 @@ import "@xyflow/react/dist/style.css";
 import { useEditorStore } from "@/lib/editor/store";
 import type { NodeKind } from "@/lib/editor/types";
 import { nodeTypes } from "./nodes";
+import { NodeConfigPanel } from "./config-panel";
 import { NodePalette, DND_MIME } from "./palette";
 import { useEditorKeyboard } from "./use-editor-keyboard";
 
@@ -46,10 +47,11 @@ function Canvas() {
   return (
     <div className="flex flex-col gap-3">
       <NodePalette onAdd={(kind) => addAt(kind)} />
-      <div
-        ref={wrapper}
-        className="h-[calc(100vh-12rem)] w-full rounded-lg border border-border"
-        aria-label="Workflow graph canvas"
+      <div className="flex items-start gap-3">
+        <div
+          ref={wrapper}
+          className="h-[calc(100vh-12rem)] w-full rounded-lg border border-border"
+          aria-label="Workflow graph canvas"
         onDragOver={(event) => {
           if (event.dataTransfer.types.includes(DND_MIME)) {
             event.preventDefault();
@@ -96,6 +98,8 @@ function Canvas() {
             className="!bg-muted"
           />
         </ReactFlow>
+        </div>
+        <NodeConfigPanel />
       </div>
     </div>
   );
