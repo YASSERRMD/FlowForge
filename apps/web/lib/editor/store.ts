@@ -16,10 +16,20 @@ import { isValidConnection } from "./graph";
 export type FlowNode = Node<FlowNodeData>;
 export type FlowEdge = Edge;
 
+interface Snapshot {
+  nodes: FlowNode[];
+  edges: FlowEdge[];
+  counters: Record<NodeKind, number>;
+}
+
+const HISTORY_LIMIT = 50;
+
 interface EditorState {
   nodes: FlowNode[];
   edges: FlowEdge[];
   counters: Record<NodeKind, number>;
+  past: Snapshot[];
+  future: Snapshot[];
   onNodesChange: (changes: NodeChangeset<FlowNode>) => void;
   onEdgesChange: (changes: EdgeChangeset<FlowEdge>) => void;
   onConnect: (connection: Connection) => void;
@@ -27,6 +37,9 @@ interface EditorState {
   canConnect: (connection: Connection | FlowEdge, ignoreEdgeId?: string) => boolean;
   addNode: (kind: NodeKind, position: { x: number; y: number }) => FlowNode;
   updateNodeLabel: (id: string, label: string) => void;
+  deleteSelection: () => void;
+  undo: () => void;
+  redo: () => void;
   setNodes: (nodes: FlowNode[]) => void;
   setEdges: (edges: FlowEdge[]) => void;
 }
@@ -54,75 +67,168 @@ function nextId(counters: Record<NodeKind, number>, kind: NodeKind) {
   return { id: `${kind}-${n}`, counters: { ...counters, [kind]: n } };
 }
 
-export const useEditorStore = create<EditorState>((set, get) => ({
-  nodes: initialNodes,
-  edges: [],
-  counters: { start: 1, end: 1 } as Record<NodeKind, number>,
-
-  onNodesChange: (changes) =>
-    set({ nodes: changes.applyTo(get().nodes) }),
-
-  onEdgesChange: (changes) =>
-    set({ edges: changes.applyTo(get().edges) }),
-
-  canConnect: (connection, ignoreEdgeId) => {
-    const { nodes, edges } = get();
-    return isValidConnection(connection, nodes, edges, ignoreEdgeId);
-  },
-
-  onReconnect: (oldEdge, connection) => {
-    const { nodes, edges } = get();
-    if (!isValidConnection(connection, nodes, edges, oldEdge.id)) return;
-    const updated: FlowEdge = {
-      ...oldEdge,
-      ...connection,
-      id: `e-${connection.source}-${connection.sourceHandle ?? "out"}-${connection.target}-${connection.targetHandle ?? "in"}`,
+export const useEditorStore = create<EditorState>((set, get) => {
+  /** Pushes the current state onto the undo stack and clears redo. */
+  const checkpoint = () => {
+    const { nodes, edges, counters, past } = get();
+    const snapshot: Snapshot = {
+      nodes: structuredClone(nodes),
+      edges: structuredClone(edges),
+      counters: { ...counters },
     };
-    set({ edges: edges.map((e) => (e.id === oldEdge.id ? updated : e)) });
-  },
+    set({ past: [...past.slice(-(HISTORY_LIMIT - 1)), snapshot], future: [] });
+  };
 
-  onConnect: (connection) => {
-    const { edges, nodes } = get();
-    if (!isValidConnection(connection, nodes, edges)) return;
-    const source = nodes.find((n) => n.id === connection.source);
-    // Branch edges carry their outcome as a visible label.
-    const branchLabel =
-      source?.type === "condition" &&
-      (connection.sourceHandle === "true" || connection.sourceHandle === "false")
-        ? connection.sourceHandle
-        : undefined;
-    // Fork edges are animated so parallel paths stay visually traceable.
-    const fromFork = source?.type === "fork";
-    const edge: FlowEdge = {
-      ...connection,
-      id: `e-${connection.source}-${connection.sourceHandle ?? "out"}-${connection.target}-${connection.targetHandle ?? "in"}`,
-      label: branchLabel ?? (fromFork ? (connection.sourceHandle ?? undefined) : undefined),
-      animated: fromFork,
-      data: branchLabel ? { branch: branchLabel } : undefined,
-    };
-    set({ edges: [...edges, edge] });
-  },
+  return {
+    nodes: initialNodes,
+    edges: [],
+    counters: { start: 1, end: 1 } as Record<NodeKind, number>,
+    past: [],
+    future: [],
 
-  addNode: (kind, position) => {
-    const { counters, nodes } = get();
-    const { id, counters: next } = nextId(counters, kind);
-    const node: FlowNode = {
-      id,
-      type: kind,
-      position,
-      data: { label: `${NODE_KIND_LABELS[kind]} ${next[kind]}`, kind },
-    };
-    set({ nodes: [...nodes, node], counters: next });
-    return node;
-  },
+    onNodesChange: (changes) => {
+      // Record deletions and completed drags; skip selection/hover noise
+      // and in-progress drag frames.
+      const arr = changes.toArray();
+      const hasRemoval = arr.some((c) => c.type === "remove");
+      const dragEnded = arr.some(
+        (c) => c.type === "position" && c.dragging === false,
+      );
+      const deletableRemoval = arr.some(
+        (c) =>
+          c.type === "remove" &&
+          get().nodes.find((n) => n.id === c.id)?.deletable !== false,
+      );
+      if (hasRemoval && deletableRemoval) checkpoint();
+      else if (dragEnded && !hasRemoval) checkpoint();
+      set({ nodes: changes.applyTo(get().nodes) });
+    },
 
-  updateNodeLabel: (id, label) =>
-    set({
-      nodes: get().nodes.map((n) =>
-        n.id === id ? { ...n, data: { ...n.data, label } } : n,
-      ),
-    }),
+    onEdgesChange: (changes) => {
+      const hasRemoval = changes.toArray().some((c) => c.type === "remove");
+      if (hasRemoval) checkpoint();
+      set({ edges: changes.applyTo(get().edges) });
+    },
 
-  setNodes: (nodes) => set({ nodes }),
-  setEdges: (edges) => set({ edges }),
-}));
+    canConnect: (connection, ignoreEdgeId) => {
+      const { nodes, edges } = get();
+      return isValidConnection(connection, nodes, edges, ignoreEdgeId);
+    },
+
+    onReconnect: (oldEdge, connection) => {
+      const { nodes, edges } = get();
+      if (!isValidConnection(connection, nodes, edges, oldEdge.id)) return;
+      checkpoint();
+      const updated: FlowEdge = {
+        ...oldEdge,
+        ...connection,
+        id: `e-${connection.source}-${connection.sourceHandle ?? "out"}-${connection.target}-${connection.targetHandle ?? "in"}`,
+      };
+      set({ edges: edges.map((e) => (e.id === oldEdge.id ? updated : e)) });
+    },
+
+    onConnect: (connection) => {
+      const { edges, nodes } = get();
+      if (!isValidConnection(connection, nodes, edges)) return;
+      checkpoint();
+      const source = nodes.find((n) => n.id === connection.source);
+      // Branch edges carry their outcome as a visible label.
+      const branchLabel =
+        source?.type === "condition" &&
+        (connection.sourceHandle === "true" || connection.sourceHandle === "false")
+          ? connection.sourceHandle
+          : undefined;
+      // Fork edges are animated so parallel paths stay visually traceable.
+      const fromFork = source?.type === "fork";
+      const edge: FlowEdge = {
+        ...connection,
+        id: `e-${connection.source}-${connection.sourceHandle ?? "out"}-${connection.target}-${connection.targetHandle ?? "in"}`,
+        label:
+          branchLabel ?? (fromFork ? (connection.sourceHandle ?? undefined) : undefined),
+        animated: fromFork,
+        data: branchLabel ? { branch: branchLabel } : undefined,
+      };
+      set({ edges: [...edges, edge] });
+    },
+
+    addNode: (kind, position) => {
+      const { counters, nodes } = get();
+      checkpoint();
+      const { id, counters: next } = nextId(counters, kind);
+      const node: FlowNode = {
+        id,
+        type: kind,
+        position,
+        data: { label: `${NODE_KIND_LABELS[kind]} ${next[kind]}`, kind },
+      };
+      set({ nodes: [...nodes, node], counters: next });
+      return node;
+    },
+
+    updateNodeLabel: (id, label) => {
+      const target = get().nodes.find((n) => n.id === id);
+      if (!target || target.data.label === label) return;
+      checkpoint();
+      set({
+        nodes: get().nodes.map((n) =>
+          n.id === id ? { ...n, data: { ...n.data, label } } : n,
+        ),
+      });
+    },
+
+    deleteSelection: () => {
+      const { nodes, edges } = get();
+      const doomedNodes = new Set(
+        nodes.filter((n) => n.selected && n.deletable !== false).map((n) => n.id),
+      );
+      const doomedEdges = new Set(
+        edges
+          .filter(
+            (e) => e.selected || doomedNodes.has(e.source) || doomedNodes.has(e.target),
+          )
+          .map((e) => e.id),
+      );
+      if (doomedNodes.size === 0 && doomedEdges.size === 0) return;
+      checkpoint();
+      set({
+        nodes: nodes.filter((n) => !doomedNodes.has(n.id)),
+        edges: edges.filter((e) => !doomedEdges.has(e.id)),
+      });
+    },
+
+    undo: () => {
+      const { past, future, nodes, edges, counters } = get();
+      const snapshot = past[past.length - 1];
+      if (!snapshot) return;
+      set({
+        past: past.slice(0, -1),
+        future: [
+          { nodes: structuredClone(nodes), edges: structuredClone(edges), counters: { ...counters } },
+          ...future,
+        ].slice(0, HISTORY_LIMIT),
+        nodes: snapshot.nodes,
+        edges: snapshot.edges,
+        counters: snapshot.counters,
+      });
+    },
+
+    redo: () => {
+      const { past, future, nodes, edges, counters } = get();
+      const snapshot = future[0];
+      if (!snapshot) return;
+      set({
+        future: future.slice(1),
+        past: [
+          ...past,
+          { nodes: structuredClone(nodes), edges: structuredClone(edges), counters: { ...counters } },
+        ].slice(-HISTORY_LIMIT),
+        nodes: snapshot.nodes,
+        edges: snapshot.edges,
+        counters: snapshot.counters,
+      });
+    },
+
+    setNodes: (nodes) => set({ nodes }),
+    setEdges: (edges) => set({ edges }),
+  };
+});
