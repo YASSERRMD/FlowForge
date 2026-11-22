@@ -18,20 +18,23 @@ import (
 
 // Server is the FlowForge API HTTP server.
 type Server struct {
-	cfg    config.Config
-	log    *slog.Logger
-	router chi.Router
-	http   *http.Server
+	cfg     config.Config
+	log     *slog.Logger
+	router  chi.Router
+	http    *http.Server
+	checker *Checker
 }
 
 // New builds the server with its route table and middleware stack.
 func New(cfg config.Config, log *slog.Logger) *Server {
-	s := &Server{cfg: cfg, log: log}
+	s := &Server{cfg: cfg, log: log, checker: NewChecker(2 * time.Second)}
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RequestLogger(log))
 	r.Use(middleware.Recoverer(log))
+	r.Get("/healthz", s.handleLiveness)
+	r.Get("/readyz", s.handleReadiness)
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/ping", s.handlePing)
 	})
@@ -50,6 +53,11 @@ func New(cfg config.Config, log *slog.Logger) *Server {
 
 // Handler exposes the root handler (used in tests).
 func (s *Server) Handler() http.Handler { return s.router }
+
+// RegisterReadinessCheck adds a dependency probe to /readyz.
+func (s *Server) RegisterReadinessCheck(name string, fn CheckFunc) {
+	s.checker.Register(name, fn)
+}
 
 // Run starts serving and blocks until ctx is cancelled, then shuts down
 // gracefully within a bounded drain period.

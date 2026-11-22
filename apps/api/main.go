@@ -25,6 +25,8 @@ func main() {
 	defer stop()
 
 	srv := httpserver.New(cfg, log)
+	srv.RegisterReadinessCheck("postgres", httpserver.DialCheck(cfg.DatabaseURL))
+	srv.RegisterReadinessCheck("redis", httpserver.DialCheck(cfg.RedisURL))
 	if err := srv.Run(ctx); err != nil {
 		log.Error("server exited with error", "error", err)
 		os.Exit(1)
