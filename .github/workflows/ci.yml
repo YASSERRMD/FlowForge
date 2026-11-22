@@ -56,7 +56,7 @@ jobs:
       - name: typecheck
         run: pnpm exec tsc --noEmit
       - name: unit tests
-        run: pnpm test --if-present
+        run: pnpm run --if-present test
       - name: build
         run: pnpm build
 
