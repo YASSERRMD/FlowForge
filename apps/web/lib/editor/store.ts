@@ -23,6 +23,7 @@ interface EditorState {
   onEdgesChange: (changes: EdgeChangeset<FlowEdge>) => void;
   onConnect: (connection: Connection) => void;
   addNode: (kind: NodeKind, position: { x: number; y: number }) => FlowNode;
+  updateNodeLabel: (id: string, label: string) => void;
   setNodes: (nodes: FlowNode[]) => void;
   setEdges: (edges: FlowEdge[]) => void;
 }
@@ -82,6 +83,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set({ nodes: [...nodes, node], counters: next });
     return node;
   },
+
+  updateNodeLabel: (id, label) =>
+    set({
+      nodes: get().nodes.map((n) =>
+        n.id === id ? { ...n, data: { ...n.data, label } } : n,
+      ),
+    }),
 
   setNodes: (nodes) => set({ nodes }),
   setEdges: (edges) => set({ edges }),
