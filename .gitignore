@@ -1,0 +1,35 @@
+# Local prompt/scratch material (not part of the product)
+temp/
+
+# Secrets and local environment — never commit real values
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+apps/web/.next/
+apps/web/out/
+dist/
+bin/
+coverage/
+
+# Test artifacts
+test-results/
+playwright-report/
+*.testlog
+
+# Runtime data
+*.log
+tmp/
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+*.swp

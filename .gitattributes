@@ -1,0 +1,28 @@
+# Default: LF line endings, normalized on commit
+* text=auto eol=lf
+
+# Explicit text types
+*.go    text eol=lf
+*.ts    text eol=lf
+*.tsx   text eol=lf
+*.js    text eol=lf
+*.json  text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.sql   text eol=lf
+*.md    text eol=lf
+*.css   text eol=lf
+*.html  text eol=lf
+
+# Shell scripts must stay LF (containers)
+*.sh    text eol=lf
+Makefile text eol=lf
+
+# Binary types
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.woff  binary
+*.woff2 binary
