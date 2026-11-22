@@ -33,12 +33,26 @@ type Config struct {
 	WorkerConcurrency int
 	PollInterval      time.Duration
 	SessionSecret     string
+	// DevAuthEnabled allows the explicit development-only auth bypass. It is
+	// rejected in production regardless of intent.
+	DevAuthEnabled bool
+	// HTTP server timeouts.
+	ReadTimeout      time.Duration
+	WriteTimeout     time.Duration
+	IdleTimeout      time.Duration
+	ShutdownTimeout  time.Duration
+	MaxRequestBodyKB int
 }
 
 const (
-	minSessionSecretLen = 32
-	defaultPollInterval = 250 * time.Millisecond
-	defaultConcurrency  = 8
+	minSessionSecretLen   = 32
+	defaultPollInterval   = 250 * time.Millisecond
+	defaultConcurrency    = 8
+	defaultReadTimeout    = 30 * time.Second
+	defaultWriteTimeout   = 60 * time.Second
+	defaultIdleTimeout    = 120 * time.Second
+	defaultShutdownTimout = 10 * time.Second
+	defaultMaxBodyKB      = 1024
 )
 
 // Load reads configuration from the process environment and validates it.
@@ -49,12 +63,47 @@ func Load(getenv func(string) string) (Config, error) {
 	var errs []string
 
 	cfg := Config{
-		APIAddr:       valueOr(getenv("API_ADDR"), "127.0.0.1:8080"),
-		DatabaseURL:   getenv("DATABASE_URL"),
-		RedisURL:      getenv("REDIS_URL"),
-		WorkerID:      valueOr(getenv("WORKER_ID"), "worker-local-1"),
-		SessionSecret: getenv("SESSION_SECRET"),
-		PollInterval:  defaultPollInterval,
+		APIAddr:          valueOr(getenv("API_ADDR"), "127.0.0.1:8080"),
+		DatabaseURL:      getenv("DATABASE_URL"),
+		RedisURL:         getenv("REDIS_URL"),
+		WorkerID:         valueOr(getenv("WORKER_ID"), "worker-local-1"),
+		SessionSecret:    getenv("SESSION_SECRET"),
+		PollInterval:     defaultPollInterval,
+		ReadTimeout:      defaultReadTimeout,
+		WriteTimeout:     defaultWriteTimeout,
+		IdleTimeout:      defaultIdleTimeout,
+		ShutdownTimeout:  defaultShutdownTimout,
+		MaxRequestBodyKB: defaultMaxBodyKB,
+	}
+
+	cfg.DevAuthEnabled = valueOr(getenv("AUTH_DEV_MODE"), "false") == "true"
+	if cfg.DevAuthEnabled && Env(valueOr(getenv("APP_ENV"), string(EnvDevelopment))) == EnvProduction {
+		errs = append(errs, "AUTH_DEV_MODE must not be enabled in production")
+	}
+
+	if v := getenv("HTTP_READ_TIMEOUT_MS"); v != "" {
+		d, err := durationMillis(v, 1000)
+		if err != nil {
+			errs = append(errs, "HTTP_READ_TIMEOUT_MS must be an integer >= 1000")
+		} else {
+			cfg.ReadTimeout = d
+		}
+	}
+	if v := getenv("HTTP_WRITE_TIMEOUT_MS"); v != "" {
+		d, err := durationMillis(v, 1000)
+		if err != nil {
+			errs = append(errs, "HTTP_WRITE_TIMEOUT_MS must be an integer >= 1000")
+		} else {
+			cfg.WriteTimeout = d
+		}
+	}
+	if v := getenv("HTTP_MAX_BODY_KB"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 102400 {
+			errs = append(errs, "HTTP_MAX_BODY_KB must be an integer between 1 and 102400")
+		} else {
+			cfg.MaxRequestBodyKB = n
+		}
 	}
 
 	switch env := Env(valueOr(getenv("APP_ENV"), string(EnvDevelopment))); env {
@@ -131,4 +180,12 @@ func valueOr(v, fallback string) string {
 		return fallback
 	}
 	return v
+}
+
+func durationMillis(v string, min int) (time.Duration, error) {
+	n, err := strconv.Atoi(v)
+	if err != nil || n < min {
+		return 0, fmt.Errorf("invalid millisecond value %q", v)
+	}
+	return time.Duration(n) * time.Millisecond, nil
 }
