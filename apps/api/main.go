@@ -2,13 +2,32 @@
 package main
 
 import (
-	"fmt"
+	"context"
+	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 
-	"github.com/YASSERRMD/FlowForge/internal/buildinfo"
+	"github.com/YASSERRMD/FlowForge/internal/config"
+	"github.com/YASSERRMD/FlowForge/internal/httpserver"
 )
 
 func main() {
-	fmt.Printf("flowforge-api %s (commit %s)\n", buildinfo.Version, buildinfo.Commit)
-	fmt.Fprintln(os.Stderr, "api server bootstrap: routing is added in phase 03")
+	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+
+	cfg, err := config.Load(nil)
+	if err != nil {
+		log.Error("invalid configuration", "error", err)
+		os.Exit(1)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	srv := httpserver.New(cfg, log)
+	if err := srv.Run(ctx); err != nil {
+		log.Error("server exited with error", "error", err)
+		os.Exit(1)
+	}
+	log.Info("server stopped cleanly")
 }
