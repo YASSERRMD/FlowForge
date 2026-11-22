@@ -71,10 +71,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       (connection.sourceHandle === "true" || connection.sourceHandle === "false")
         ? connection.sourceHandle
         : undefined;
+    // Fork edges are animated so parallel paths stay visually traceable.
+    const fromFork = source?.type === "fork";
     const edge: FlowEdge = {
       ...connection,
       id: `e-${connection.source}-${connection.sourceHandle ?? "out"}-${connection.target}-${connection.targetHandle ?? "in"}`,
-      label: branchLabel,
+      label: branchLabel ?? (fromFork ? (connection.sourceHandle ?? undefined) : undefined),
+      animated: fromFork,
       data: branchLabel ? { branch: branchLabel } : undefined,
     };
     set({ edges: [...edges, edge] });
