@@ -92,7 +92,7 @@ func (q *Queries) CompleteTask(ctx context.Context, arg CompleteTaskParams) erro
 
 const enqueueTask = `-- name: EnqueueTask :one
 INSERT INTO scheduled_tasks (task_type, dedupe_key, payload, run_at, max_attempts)
-VALUES ($1, $2, $3, $4, $5)
+VALUES ($1, $2, $3, COALESCE($4::timestamptz, now()), $5)
 ON CONFLICT (task_type, dedupe_key) DO NOTHING
 RETURNING id, task_type, dedupe_key, payload, run_at, leased_by, lease_expires_at, attempts, max_attempts, last_error, status, created_at, updated_at
 `
@@ -101,7 +101,7 @@ type EnqueueTaskParams struct {
 	TaskType    string             `json:"task_type"`
 	DedupeKey   string             `json:"dedupe_key"`
 	Payload     []byte             `json:"payload"`
-	RunAt       pgtype.Timestamptz `json:"run_at"`
+	Column4     pgtype.Timestamptz `json:"column_4"`
 	MaxAttempts int32              `json:"max_attempts"`
 }
 
@@ -110,7 +110,7 @@ func (q *Queries) EnqueueTask(ctx context.Context, arg EnqueueTaskParams) (Sched
 		arg.TaskType,
 		arg.DedupeKey,
 		arg.Payload,
-		arg.RunAt,
+		arg.Column4,
 		arg.MaxAttempts,
 	)
 	var i ScheduledTask

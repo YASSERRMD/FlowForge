@@ -1,6 +1,6 @@
 -- name: EnqueueTask :one
 INSERT INTO scheduled_tasks (task_type, dedupe_key, payload, run_at, max_attempts)
-VALUES ($1, $2, $3, $4, $5)
+VALUES ($1, $2, $3, COALESCE($4::timestamptz, now()), $5)
 ON CONFLICT (task_type, dedupe_key) DO NOTHING
 RETURNING *;
 

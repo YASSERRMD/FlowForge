@@ -16,6 +16,22 @@ jobs:
   go:
     name: go (fmt, vet, test, race, build)
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: flowforge
+          POSTGRES_PASSWORD: flowforge
+          POSTGRES_DB: flowforge
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U flowforge"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      FLOWFORGE_TEST_DATABASE_URL: postgres://flowforge:flowforge@localhost:5432/flowforge?sslmode=disable
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -32,6 +48,10 @@ jobs:
         run: go test -race ./...
       - name: go build
         run: go build ./...
+      - name: sqlc codegen is deterministic
+        run: |
+          go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1 generate
+          git diff --exit-code -- internal/db/dbgen
 
   web:
     name: web (lint, typecheck, test, build)
