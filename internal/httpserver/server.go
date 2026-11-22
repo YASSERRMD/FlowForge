@@ -31,6 +31,7 @@ func New(cfg config.Config, log *slog.Logger) *Server {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RequestLogger(log))
+	r.Use(middleware.Recoverer(log))
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/ping", s.handlePing)
 	})
