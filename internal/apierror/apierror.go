@@ -16,17 +16,17 @@ import (
 type Code string
 
 const (
-	CodeInternal       Code = "internal_error"
-	CodeBadRequest     Code = "bad_request"
-	CodeMalformedJSON  Code = "malformed_json"
-	CodeBodyTooLarge   Code = "body_too_large"
-	CodeUnknownFields  Code = "unknown_fields"
-	CodeValidation     Code = "validation_failed"
-	CodeUnauthorized   Code = "unauthorized"
-	CodeForbidden      Code = "forbidden"
-	CodeNotFound       Code = "not_found"
-	CodeConflict       Code = "conflict"
-	CodeUnavailable    Code = "service_unavailable"
+	CodeInternal      Code = "internal_error"
+	CodeBadRequest    Code = "bad_request"
+	CodeMalformedJSON Code = "malformed_json"
+	CodeBodyTooLarge  Code = "body_too_large"
+	CodeUnknownFields Code = "unknown_fields"
+	CodeValidation    Code = "validation_failed"
+	CodeUnauthorized  Code = "unauthorized"
+	CodeForbidden     Code = "forbidden"
+	CodeNotFound      Code = "not_found"
+	CodeConflict      Code = "conflict"
+	CodeUnavailable   Code = "service_unavailable"
 )
 
 // FieldError describes one invalid request field.
