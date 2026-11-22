@@ -1,9 +1,9 @@
 # FlowForge execution status
 
-- Current phase: 04 (gate: push/PR/merge pending)
-- Current branch: phase/04-database-schema-access
+- Current phase: 05 (gate: push/PR/merge pending)
+- Current branch: phase/05-visual-graph-designer
 - Repository remote: https://github.com/YASSERRMD/FlowForge.git
-- Last verified merge to main: PR #3 `634333f` (phase 03, merge commit)
+- Last verified merge to main: PR #4 `8d2ff3c` (phase 04, merge commit)
 - Environment availability: Go [1.25.5], Node [24.11.1], package manager
   [pnpm 10.22.0], Docker [29.0.1], PostgreSQL [via Docker],
   Redis [via Docker], GitHub auth [gh 2.83.2, account YASSERRMD, scopes: repo]
