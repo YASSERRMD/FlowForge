@@ -18,6 +18,7 @@ apps/web/out/
 dist/
 bin/
 coverage/
+*.tsbuildinfo
 
 # Test artifacts
 test-results/
