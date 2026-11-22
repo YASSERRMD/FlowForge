@@ -1,4 +1,7 @@
 // Command api runs the FlowForge HTTP and WebSocket API service.
+//
+//	api              # serve the API
+//	api migrate      # apply database migrations (see migrate_cmd.go)
 package main
 
 import (
@@ -19,6 +22,10 @@ func main() {
 	if err != nil {
 		log.Error("invalid configuration", "error", err)
 		os.Exit(1)
+	}
+
+	if len(os.Args) > 1 && os.Args[1] == "migrate" {
+		os.Exit(runMigrate(cfg, os.Args[2:]))
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
