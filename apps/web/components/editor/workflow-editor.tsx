@@ -17,8 +17,10 @@ import { useEditorStore } from "@/lib/editor/store";
 import type { NodeKind } from "@/lib/editor/types";
 import { nodeTypes } from "./nodes";
 import { NodePalette, DND_MIME } from "./palette";
+import { useEditorKeyboard } from "./use-editor-keyboard";
 
 function Canvas() {
+  useEditorKeyboard();
   const nodes = useEditorStore((s) => s.nodes);
   const edges = useEditorStore((s) => s.edges);
   const onNodesChange = useEditorStore((s) => s.onNodesChange);

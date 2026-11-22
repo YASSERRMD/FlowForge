@@ -30,6 +30,7 @@ interface EditorState {
   counters: Record<NodeKind, number>;
   past: Snapshot[];
   future: Snapshot[];
+  clipboard: { nodes: FlowNode[]; edges: FlowEdge[] } | null;
   onNodesChange: (changes: NodeChangeset<FlowNode>) => void;
   onEdgesChange: (changes: EdgeChangeset<FlowEdge>) => void;
   onConnect: (connection: Connection) => void;
@@ -38,6 +39,10 @@ interface EditorState {
   addNode: (kind: NodeKind, position: { x: number; y: number }) => FlowNode;
   updateNodeLabel: (id: string, label: string) => void;
   deleteSelection: () => void;
+  copySelection: () => void;
+  pasteClipboard: () => void;
+  duplicateSelection: () => void;
+  selectAll: () => void;
   undo: () => void;
   redo: () => void;
   setNodes: (nodes: FlowNode[]) => void;
@@ -79,12 +84,60 @@ export const useEditorStore = create<EditorState>((set, get) => {
     set({ past: [...past.slice(-(HISTORY_LIMIT - 1)), snapshot], future: [] });
   };
 
+  /** Inserts cloned nodes/edges with fresh deterministic IDs, offset and
+   * selected. Node kinds drive the new IDs via the shared counter. */
+  const insertCopies = (
+    getState: () => EditorState,
+    setState: (partial: Partial<EditorState>) => void,
+    srcNodes: FlowNode[],
+    srcEdges: FlowEdge[],
+  ) => {
+    let { counters } = getState();
+    const { nodes, edges } = getState();
+    const idMap = new Map<string, string>();
+    const newNodes: FlowNode[] = [];
+
+    for (const node of srcNodes) {
+      const kind = (node.data.kind ?? node.type) as NodeKind;
+      const { id, counters: next } = nextId(counters, kind);
+      counters = next;
+      idMap.set(node.id, id);
+      newNodes.push({
+        ...node,
+        id,
+        position: { x: node.position.x + 32, y: node.position.y + 32 },
+        selected: true,
+      });
+    }
+
+    const newEdges: FlowEdge[] = [];
+    for (const edge of srcEdges) {
+      const source = idMap.get(edge.source);
+      const target = idMap.get(edge.target);
+      if (!source || !target) continue;
+      newEdges.push({
+        ...edge,
+        id: `e-${source}-${edge.sourceHandle ?? "out"}-${target}-${edge.targetHandle ?? "in"}`,
+        source,
+        target,
+        selected: true,
+      });
+    }
+
+    setState({
+      nodes: [...nodes.map((n) => ({ ...n, selected: false })), ...newNodes],
+      edges: [...edges.map((e) => ({ ...e, selected: false })), ...newEdges],
+      counters,
+    });
+  };
+
   return {
     nodes: initialNodes,
     edges: [],
     counters: { start: 1, end: 1 } as Record<NodeKind, number>,
     past: [],
     future: [],
+    clipboard: null,
 
     onNodesChange: (changes) => {
       // Record deletions and completed drags; skip selection/hover noise
@@ -193,6 +246,49 @@ export const useEditorStore = create<EditorState>((set, get) => {
       set({
         nodes: nodes.filter((n) => !doomedNodes.has(n.id)),
         edges: edges.filter((e) => !doomedEdges.has(e.id)),
+      });
+    },
+
+    copySelection: () => {
+      const { nodes, edges } = get();
+      const selected = nodes.filter((n) => n.selected);
+      if (selected.length === 0) return;
+      const ids = new Set(selected.map((n) => n.id));
+      set({
+        clipboard: {
+          nodes: structuredClone(selected),
+          edges: structuredClone(
+            edges.filter((e) => ids.has(e.source) && ids.has(e.target)),
+          ),
+        },
+      });
+    },
+
+    pasteClipboard: () => {
+      const { clipboard } = get();
+      if (!clipboard || clipboard.nodes.length === 0) return;
+      checkpoint();
+      insertCopies(get, set, clipboard.nodes, clipboard.edges);
+    },
+
+    duplicateSelection: () => {
+      const { nodes, edges } = get();
+      const selected = nodes.filter((n) => n.selected && n.deletable !== false);
+      if (selected.length === 0) return;
+      const ids = new Set(selected.map((n) => n.id));
+      checkpoint();
+      insertCopies(
+        get,
+        set,
+        structuredClone(selected),
+        structuredClone(edges.filter((e) => ids.has(e.source) && ids.has(e.target))),
+      );
+    },
+
+    selectAll: () => {
+      set({
+        nodes: get().nodes.map((n) => ({ ...n, selected: true })),
+        edges: get().edges.map((e) => ({ ...e, selected: true })),
       });
     },
 

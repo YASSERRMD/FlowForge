@@ -95,3 +95,44 @@ describe("undo/redo history", () => {
     expect(s().nodes).toHaveLength(2);
   });
 });
+
+describe("copy/paste and duplicate", () => {
+  it("duplicates a selected node with a fresh deterministic id", () => {
+    const a = s().addNode("action", { x: 0, y: 0 });
+    s().setNodes(s().nodes.map((n) => ({ ...n, selected: n.id === a.id })));
+    s().duplicateSelection();
+    const ids = s().nodes.map((n) => n.id);
+    expect(ids).toContain("action-1");
+    expect(ids).toContain("action-2");
+    expect(s().nodes.find((n) => n.id === "action-2")?.selected).toBe(true);
+  });
+
+  it("copy/paste clones nodes and internal edges with remapped ids", () => {
+    const a = s().addNode("action", { x: 0, y: 0 });
+    const b = s().addNode("delay", { x: 0, y: 100 });
+    s().onConnect({ source: a.id, sourceHandle: "out", target: b.id, targetHandle: "in" });
+    s().setNodes(s().nodes.map((n) => ({ ...n, selected: true })));
+    s().copySelection();
+    s().pasteClipboard();
+
+    const ids = s().nodes.map((n) => n.id);
+    expect(ids).toEqual(expect.arrayContaining(["action-1", "delay-1", "action-2", "delay-2"]));
+    // The pasted edge connects the pasted nodes, not the originals.
+    const pasted = s().edges.find((e) => e.source === "action-2");
+    expect(pasted?.target).toBe("delay-2");
+  });
+
+  it("paste without clipboard is a no-op", () => {
+    s().pasteClipboard();
+    expect(s().nodes).toHaveLength(2);
+  });
+
+  it("duplicate is undoable", () => {
+    const a = s().addNode("action", { x: 0, y: 0 });
+    s().setNodes(s().nodes.map((n) => ({ ...n, selected: n.id === a.id })));
+    s().duplicateSelection();
+    expect(s().nodes).toHaveLength(4);
+    s().undo();
+    expect(s().nodes).toHaveLength(3);
+  });
+});
