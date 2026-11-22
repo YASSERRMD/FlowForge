@@ -23,11 +23,17 @@ type Server struct {
 	router  chi.Router
 	http    *http.Server
 	checker *Checker
+	auth    Authenticator
 }
 
 // New builds the server with its route table and middleware stack.
 func New(cfg config.Config, log *slog.Logger) *Server {
-	s := &Server{cfg: cfg, log: log, checker: NewChecker(2 * time.Second)}
+	s := &Server{
+		cfg:     cfg,
+		log:     log,
+		checker: NewChecker(2 * time.Second),
+		auth:    NewAuthenticator(cfg),
+	}
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -37,6 +43,10 @@ func New(cfg config.Config, log *slog.Logger) *Server {
 	r.Get("/readyz", s.handleReadiness)
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/ping", s.handlePing)
+		r.Group(func(r chi.Router) {
+			r.Use(s.RequireAuth)
+			r.Get("/me", s.handleMe)
+		})
 	})
 	s.router = r
 
