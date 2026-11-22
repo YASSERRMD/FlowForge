@@ -3,7 +3,7 @@
 
 WEB_DIR := apps/web
 
-.PHONY: setup fmt lint test build up down verify clean
+.PHONY: setup fmt lint test build up down verify clean openapi-check
 
 ## setup: install all local dependencies (Go modules + pnpm packages)
 setup:
@@ -40,6 +40,10 @@ up:
 down:
 	docker compose -f infra/docker-compose.yml down
 
+## openapi-check: validate the OpenAPI contract and spec/route parity
+openapi-check:
+	go test ./internal/httpserver/ -run 'TestOpenAPI|TestDocumented' -count=1
+
 ## verify: full local verification gate (format check, lint, tests, builds)
 verify:
 	test -z "$$(gofmt -l .)" || (echo "gofmt: files need formatting" && gofmt -l . && exit 1)
@@ -47,6 +51,7 @@ verify:
 	go test ./...
 	go test -race ./...
 	go build ./...
+	$(MAKE) openapi-check
 	cd $(WEB_DIR) && pnpm lint
 	cd $(WEB_DIR) && pnpm exec tsc --noEmit
 	cd $(WEB_DIR) && pnpm build

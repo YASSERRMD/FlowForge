@@ -1,0 +1,195 @@
+openapi: 3.1.0
+info:
+  title: FlowForge API
+  version: "0.3.0"
+  description: |
+    FlowForge control-plane API. All application routes live under /api/v1.
+    Error responses share one envelope: `{ "error": { "code", "message", "fields?" } }`.
+  license:
+    name: MIT
+servers:
+  - url: http://localhost:8080
+    description: local development
+tags:
+  - name: system
+    description: Process health and diagnostics
+  - name: identity
+    description: Session and principal information
+paths:
+  /healthz:
+    get:
+      tags: [system]
+      summary: Liveness probe
+      description: Reports only that the process is running; never touches dependencies.
+      operationId: getLiveness
+      responses:
+        "200":
+          description: Process is alive
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusOK"
+              example:
+                status: ok
+  /readyz:
+    get:
+      tags: [system]
+      summary: Readiness probe
+      description: Runs every registered dependency check with a bounded timeout.
+      operationId: getReadiness
+      responses:
+        "200":
+          description: All dependencies healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Readiness"
+              example:
+                status: ok
+                checks:
+                  postgres: ok
+                  redis: ok
+        "503":
+          description: At least one dependency is failing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Readiness"
+              example:
+                status: degraded
+                checks:
+                  postgres: ok
+                  redis: "error: dial tcp 127.0.0.1:6379: connect: connection refused"
+  /api/v1/ping:
+    get:
+      tags: [system]
+      summary: Public connectivity check
+      operationId: ping
+      responses:
+        "200":
+          description: API reachable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusOK"
+              example:
+                status: ok
+  /api/v1/me:
+    get:
+      tags: [identity]
+      summary: Current principal
+      description: Returns the authenticated identity. Requires credentials;
+        in development the explicit dev boundary accepts the X-Dev-User header.
+      operationId: getMe
+      parameters:
+        - name: X-Dev-User
+          in: header
+          required: false
+          description: Development-only identity (APP_ENV=development, AUTH_DEV_MODE=true)
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Authenticated identity
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Identity"
+              example:
+                subject: "dev:ada"
+                display_name: ada
+                roles: [developer]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+components:
+  schemas:
+    StatusOK:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+    Readiness:
+      type: object
+      required: [status, checks]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        checks:
+          type: object
+          additionalProperties:
+            type: string
+    Identity:
+      type: object
+      required: [subject, display_name, roles]
+      properties:
+        subject:
+          type: string
+        display_name:
+          type: string
+        roles:
+          type: array
+          items:
+            type: string
+    FieldError:
+      type: object
+      required: [field, message]
+      properties:
+        field:
+          type: string
+        message:
+          type: string
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum:
+                - internal_error
+                - bad_request
+                - malformed_json
+                - body_too_large
+                - unknown_fields
+                - validation_failed
+                - unauthorized
+                - forbidden
+                - not_found
+                - conflict
+                - service_unavailable
+            message:
+              type: string
+            fields:
+              type: array
+              items:
+                $ref: "#/components/schemas/FieldError"
+  responses:
+    Unauthorized:
+      description: Authentication required or not configured
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: unauthorized
+              message: authentication required
+    BadRequest:
+      description: Malformed or invalid request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: validation_failed
+              message: request validation failed
+              fields:
+                - field: name
+                  message: is required
