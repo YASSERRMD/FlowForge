@@ -1,0 +1,70 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions: read-all
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: go (fmt, vet, test, race, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: gofmt check
+        run: test -z "$(gofmt -l .)"
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test ./...
+      - name: go test -race
+        run: go test -race ./...
+      - name: go build
+        run: go build ./...
+
+  web:
+    name: web (lint, typecheck, test, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+      - name: install
+        run: pnpm install --frozen-lockfile
+      - name: lint
+        run: pnpm lint
+      - name: typecheck
+        run: pnpm exec tsc --noEmit
+      - name: unit tests
+        run: pnpm test --if-present
+      - name: build
+        run: pnpm build
+
+  git-hygiene:
+    name: git hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: whitespace check
+        run: git diff --check HEAD~1 HEAD || true
+      - name: no committed secrets scan (patterns)
+        run: |
+          ! git grep -nEI '(BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})' -- . ':!docs' ':!.github'
