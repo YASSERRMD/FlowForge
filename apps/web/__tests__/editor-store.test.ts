@@ -34,3 +34,27 @@ describe("editor store", () => {
     expect(edges[0].id).toBe("e-start-out-action-1-in");
   });
 });
+
+describe("condition branches", () => {
+  it("labels edges from condition handles with their branch", () => {
+    const s = useEditorStore.getState();
+    const cond = s.addNode("condition", { x: 0, y: 0 });
+    const act = s.addNode("action", { x: 0, y: 100 });
+    s.onConnect({
+      source: cond.id,
+      sourceHandle: "true",
+      target: act.id,
+      targetHandle: "in",
+    });
+    const { edges } = useEditorStore.getState();
+    expect(edges[0].label).toBe("true");
+    expect(edges[0].data).toEqual({ branch: "true" });
+  });
+
+  it("does not label edges from non-condition nodes", () => {
+    const s = useEditorStore.getState();
+    const act = s.addNode("action", { x: 0, y: 0 });
+    s.onConnect({ source: "start", sourceHandle: "out", target: act.id, targetHandle: "in" });
+    expect(useEditorStore.getState().edges[0].label).toBeUndefined();
+  });
+});

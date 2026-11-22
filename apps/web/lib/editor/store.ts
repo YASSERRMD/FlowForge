@@ -63,10 +63,19 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set({ edges: changes.applyTo(get().edges) }),
 
   onConnect: (connection) => {
-    const { edges } = get();
+    const { edges, nodes } = get();
+    const source = nodes.find((n) => n.id === connection.source);
+    // Branch edges carry their outcome as a visible label.
+    const branchLabel =
+      source?.type === "condition" &&
+      (connection.sourceHandle === "true" || connection.sourceHandle === "false")
+        ? connection.sourceHandle
+        : undefined;
     const edge: FlowEdge = {
       ...connection,
       id: `e-${connection.source}-${connection.sourceHandle ?? "out"}-${connection.target}-${connection.targetHandle ?? "in"}`,
+      label: branchLabel,
+      data: branchLabel ? { branch: branchLabel } : undefined,
     };
     set({ edges: [...edges, edge] });
   },
