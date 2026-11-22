@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/YASSERRMD/FlowForge/internal/config"
+	"github.com/YASSERRMD/FlowForge/internal/httpserver/middleware"
 )
 
 // Server is the FlowForge API HTTP server.
@@ -28,6 +29,8 @@ func New(cfg config.Config, log *slog.Logger) *Server {
 	s := &Server{cfg: cfg, log: log}
 
 	r := chi.NewRouter()
+	r.Use(middleware.RequestID)
+	r.Use(middleware.RequestLogger(log))
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/ping", s.handlePing)
 	})
