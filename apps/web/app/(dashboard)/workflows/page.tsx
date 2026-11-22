@@ -1,4 +1,5 @@
 import { PageHeader } from "@/components/layout/page-header";
+import { WorkflowListing } from "@/components/workflows/workflow-listing";
 
 export default function WorkflowsPage() {
   return (
@@ -7,9 +8,7 @@ export default function WorkflowsPage() {
         title="Workflows"
         description="Design, version, and monitor your automation workflows."
       />
-      <p className="text-sm text-muted-foreground">
-        Workflow management UI is under construction. No API integration yet.
-      </p>
+      <WorkflowListing />
     </>
   );
 }
