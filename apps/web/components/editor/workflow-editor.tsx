@@ -6,6 +6,9 @@ import {
   ReactFlowProvider,
   Background,
   BackgroundVariant,
+  Controls,
+  MiniMap,
+  SelectionMode,
   useReactFlow,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -70,9 +73,26 @@ function Canvas() {
           edgesReconnectable
           reconnectRadius={12}
           fitView
+          minZoom={0.2}
+          maxZoom={2}
+          snapToGrid
+          snapGrid={[16, 16]}
+          panOnDrag={[1, 2]}
+          selectionOnDrag
+          selectionMode={SelectionMode.Partial}
+          multiSelectionKeyCode={["Shift", "Meta", "Control"]}
+          deleteKeyCode={null}
           proOptions={{ hideAttribution: false }}
         >
           <Background variant={BackgroundVariant.Dots} gap={16} size={1} />
+          <Controls position="bottom-left" aria-label="Canvas controls" />
+          <MiniMap
+            position="bottom-right"
+            pannable
+            zoomable
+            aria-label="Canvas minimap"
+            className="!bg-muted"
+          />
         </ReactFlow>
       </div>
     </div>
