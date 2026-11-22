@@ -11,6 +11,7 @@ import {
 
 import type { FlowNodeData, NodeKind } from "./types";
 import { NODE_KIND_LABELS } from "./types";
+import { isValidConnection } from "./graph";
 
 export type FlowNode = Node<FlowNodeData>;
 export type FlowEdge = Edge;
@@ -22,6 +23,8 @@ interface EditorState {
   onNodesChange: (changes: NodeChangeset<FlowNode>) => void;
   onEdgesChange: (changes: EdgeChangeset<FlowEdge>) => void;
   onConnect: (connection: Connection) => void;
+  onReconnect: (oldEdge: FlowEdge, connection: Connection) => void;
+  canConnect: (connection: Connection | FlowEdge, ignoreEdgeId?: string) => boolean;
   addNode: (kind: NodeKind, position: { x: number; y: number }) => FlowNode;
   updateNodeLabel: (id: string, label: string) => void;
   setNodes: (nodes: FlowNode[]) => void;
@@ -62,8 +65,25 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   onEdgesChange: (changes) =>
     set({ edges: changes.applyTo(get().edges) }),
 
+  canConnect: (connection, ignoreEdgeId) => {
+    const { nodes, edges } = get();
+    return isValidConnection(connection, nodes, edges, ignoreEdgeId);
+  },
+
+  onReconnect: (oldEdge, connection) => {
+    const { nodes, edges } = get();
+    if (!isValidConnection(connection, nodes, edges, oldEdge.id)) return;
+    const updated: FlowEdge = {
+      ...oldEdge,
+      ...connection,
+      id: `e-${connection.source}-${connection.sourceHandle ?? "out"}-${connection.target}-${connection.targetHandle ?? "in"}`,
+    };
+    set({ edges: edges.map((e) => (e.id === oldEdge.id ? updated : e)) });
+  },
+
   onConnect: (connection) => {
     const { edges, nodes } = get();
+    if (!isValidConnection(connection, nodes, edges)) return;
     const source = nodes.find((n) => n.id === connection.source);
     // Branch edges carry their outcome as a visible label.
     const branchLabel =

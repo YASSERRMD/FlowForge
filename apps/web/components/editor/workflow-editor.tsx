@@ -21,6 +21,8 @@ function Canvas() {
   const onNodesChange = useEditorStore((s) => s.onNodesChange);
   const onEdgesChange = useEditorStore((s) => s.onEdgesChange);
   const onConnect = useEditorStore((s) => s.onConnect);
+  const onReconnect = useEditorStore((s) => s.onReconnect);
+  const canConnect = useEditorStore((s) => s.canConnect);
   const addNode = useEditorStore((s) => s.addNode);
 
   const wrapper = React.useRef<HTMLDivElement>(null);
@@ -63,6 +65,10 @@ function Canvas() {
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
+          onReconnect={onReconnect}
+          isValidConnection={(conn) => canConnect(conn)}
+          edgesReconnectable
+          reconnectRadius={12}
           fitView
           proOptions={{ hideAttribution: false }}
         >
