@@ -83,3 +83,36 @@ git status           # tree must be clean
 - **Go build cache issues**: `go clean -cache` is safe; dependencies are
   pinned in `go.sum`.
 - **gofmt failures in CI**: run `gofmt -w .` and commit the result.
+
+## API smoke test
+
+`./scripts/smoke-api.sh` builds the real api binary, boots it with local
+development settings, and verifies every exposed endpoint (liveness,
+readiness, ping, the auth boundary, request-ID echo). Set `SMOKE_PORT` to
+override the default port (18080).
+
+Expected output ends with `SMOKE OK`. `/readyz` returns 200 when local
+PostgreSQL and Redis are reachable, otherwise a structured 503 — both are
+valid smoke outcomes.
+
+Equivalent manual curl commands:
+
+```bash
+# prerequisites (dev env)
+export APP_ENV=development AUTH_DEV_MODE=true \
+  DATABASE_URL=postgres://flowforge:flowforge@localhost:5432/flowforge \
+  REDIS_URL=redis://localhost:6379/0 \
+  SESSION_SECRET=dev-only-insecure-secret-change-me
+go run ./apps/api   # listens on 127.0.0.1:8080
+
+curl -i localhost:8080/healthz                     # 200 {"status":"ok"}
+curl -i localhost:8080/readyz                      # 200 or 503 with per-dependency checks
+curl -i localhost:8080/api/v1/ping                 # 200, public
+curl -i localhost:8080/api/v1/me                   # 401 unauthorized
+curl -i -H 'X-Dev-User: ada' localhost:8080/api/v1/me   # 200 dev identity
+curl -i -H 'X-Request-ID: my-corr-1' localhost:8080/api/v1/ping  # header echoed back
+```
+
+The dev identity header only works with `APP_ENV=development` and
+`AUTH_DEV_MODE=true`; in every other configuration the API fails closed
+with 401.
