@@ -80,6 +80,37 @@ jobs:
       - name: build
         run: pnpm build
 
+  e2e:
+    name: e2e (playwright)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: apps/web/package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+      - name: install
+        run: pnpm install --frozen-lockfile
+      - name: install chromium
+        run: pnpm exec playwright install --with-deps chromium
+      - name: build
+        run: pnpm build
+      - name: e2e tests
+        run: pnpm test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-results
+          path: apps/web/test-results
+          retention-days: 7
+
   git-hygiene:
     name: git hygiene
     runs-on: ubuntu-latest
