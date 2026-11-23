@@ -272,6 +272,10 @@ func validateNodeConfig(node *Node) []Issue {
 			return []Issue{{Severity: "error", Code: "config", NodeID: node.ID,
 				Message: fmt.Sprintf("%s: expression is required", node.Label)}}
 		}
+		if msg := ValidateExpression(s); msg != "" {
+			return []Issue{{Severity: "error", Code: "config", NodeID: node.ID,
+				Message: fmt.Sprintf("%s: %s", node.Label, msg)}}
+		}
 	case KindFork, KindJoin:
 		issue = requireNumber("branchCount", 2)
 	}

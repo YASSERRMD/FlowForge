@@ -10,11 +10,17 @@ import {
   type ConfigField,
 } from "@/lib/editor/config-schema";
 import { NODE_KIND_LABELS } from "@/lib/editor/types";
+import { validateExpression } from "@/lib/editor/expr";
 import { FormField } from "@/components/ui/form-field";
 import { Input } from "@/components/ui/input";
 
 function fieldError(field: ConfigField, value: unknown): string | null {
-  return validateField(field, value);
+  const generic = validateField(field, value);
+  if (generic) return generic;
+  if (field.type === "expression" && typeof value === "string" && value.trim() !== "") {
+    return validateExpression(value) || null;
+  }
+  return null;
 }
 
 function ConfigInput({

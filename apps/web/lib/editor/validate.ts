@@ -12,6 +12,7 @@ import {
   type WorkflowGraph,
 } from "@/lib/contracts/graph";
 import { validateConfig } from "./config-schema";
+import { validateExpression } from "./expr";
 
 export type IssueSeverity = "error" | "warning";
 
@@ -281,6 +282,22 @@ export function validateGraph(graph: WorkflowGraph): GraphIssue[] {
         nodeId: node.id,
         message: `${node.label}: ${issue.message}`,
       });
+    }
+    const expression = node.config?.expression;
+    if (
+      node.kind === "condition" &&
+      typeof expression === "string" &&
+      expression.trim() !== ""
+    ) {
+      const msg = validateExpression(expression);
+      if (msg) {
+        issues.push({
+          severity: "error",
+          code: "config",
+          nodeId: node.id,
+          message: `${node.label}: ${msg}`,
+        });
+      }
     }
   }
 
