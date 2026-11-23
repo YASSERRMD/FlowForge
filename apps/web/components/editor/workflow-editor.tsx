@@ -17,6 +17,7 @@ import { useEditorStore } from "@/lib/editor/store";
 import type { NodeKind } from "@/lib/editor/types";
 import { nodeTypes } from "./nodes";
 import { NodeConfigPanel } from "./config-panel";
+import { ValidationInspector } from "./validation-inspector";
 import { NodePalette, DND_MIME } from "./palette";
 import { useEditorKeyboard } from "./use-editor-keyboard";
 
@@ -99,8 +100,11 @@ function Canvas() {
           />
         </ReactFlow>
         </div>
-        <NodeConfigPanel />
+        <div className="flex w-72 shrink-0 flex-col gap-3 empty:hidden">
+          <NodeConfigPanel />
+        </div>
       </div>
+      <ValidationInspector />
     </div>
   );
 }
