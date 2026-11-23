@@ -40,8 +40,8 @@ describe("ApiClient", () => {
     expect(etag).toBe('"1"');
     const [url, init] = fetchFn.mock.calls[0];
     expect(url).toBe("http://api.test/api/v1/workflows");
-    expect(init.method).toBe("POST");
-    expect((init.headers as Record<string, string>)["X-Dev-User"]).toBe("ada");
+    expect(init?.method).toBe("POST");
+    expect((init?.headers as Record<string, string>)["X-Dev-User"]).toBe("ada");
   });
 
   it("saves a draft with If-Match quoted", async () => {
@@ -51,7 +51,7 @@ describe("ApiClient", () => {
     expect(saved.rowVersion).toBe(2);
     expect(etag).toBe('"2"');
     const [, init] = fetchFn.mock.calls[0];
-    expect((init.headers as Record<string, string>)["If-Match"]).toBe('"1"');
+    expect((init?.headers as Record<string, string>)["If-Match"]).toBe('"1"');
   });
 
   it("maps the error envelope to ApiError", async () => {
@@ -92,7 +92,7 @@ describe("ApiClient", () => {
   });
 
   it("handles 204 deletes", async () => {
-    const { client } = clientWith(() => new Response("", { status: 204 }));
+    const { client } = clientWith(() => new Response(null, { status: 204 }));
     await expect(client.deleteWorkflow("wf-1")).resolves.toBeUndefined();
   });
 
