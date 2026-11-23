@@ -70,7 +70,7 @@ const createWorkflowVersion = `-- name: CreateWorkflowVersion :one
 INSERT INTO workflow_versions
     (workflow_id, version_number, status, graph_json, content_hash, created_by)
 VALUES ($1, $2, 'draft', $3, $4, $5)
-RETURNING id, workflow_id, version_number, status, graph_json, content_hash, created_by, created_at, published_at
+RETURNING id, workflow_id, version_number, status, graph_json, content_hash, created_by, created_at, published_at, row_version
 `
 
 type CreateWorkflowVersionParams struct {
@@ -100,12 +100,13 @@ func (q *Queries) CreateWorkflowVersion(ctx context.Context, arg CreateWorkflowV
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.PublishedAt,
+		&i.RowVersion,
 	)
 	return i, err
 }
 
 const getDraftVersion = `-- name: GetDraftVersion :one
-SELECT id, workflow_id, version_number, status, graph_json, content_hash, created_by, created_at, published_at FROM workflow_versions
+SELECT id, workflow_id, version_number, status, graph_json, content_hash, created_by, created_at, published_at, row_version FROM workflow_versions
 WHERE workflow_id = $1 AND status = 'draft'
 `
 
@@ -122,6 +123,7 @@ func (q *Queries) GetDraftVersion(ctx context.Context, workflowID pgtype.UUID) (
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.PublishedAt,
+		&i.RowVersion,
 	)
 	return i, err
 }
@@ -148,8 +150,36 @@ func (q *Queries) GetWorkflow(ctx context.Context, id pgtype.UUID) (Workflow, er
 	return i, err
 }
 
+const getWorkflowForOwner = `-- name: GetWorkflowForOwner :one
+SELECT id, owner_id, name, description, status, current_version_id, created_at, updated_at, archived_at, row_version FROM workflows
+WHERE id = $1 AND owner_id = $2 AND archived_at IS NULL
+`
+
+type GetWorkflowForOwnerParams struct {
+	ID      pgtype.UUID `json:"id"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) GetWorkflowForOwner(ctx context.Context, arg GetWorkflowForOwnerParams) (Workflow, error) {
+	row := q.db.QueryRow(ctx, getWorkflowForOwner, arg.ID, arg.OwnerID)
+	var i Workflow
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerID,
+		&i.Name,
+		&i.Description,
+		&i.Status,
+		&i.CurrentVersionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ArchivedAt,
+		&i.RowVersion,
+	)
+	return i, err
+}
+
 const getWorkflowVersion = `-- name: GetWorkflowVersion :one
-SELECT id, workflow_id, version_number, status, graph_json, content_hash, created_by, created_at, published_at FROM workflow_versions
+SELECT id, workflow_id, version_number, status, graph_json, content_hash, created_by, created_at, published_at, row_version FROM workflow_versions
 WHERE workflow_id = $1 AND version_number = $2
 `
 
@@ -171,6 +201,7 @@ func (q *Queries) GetWorkflowVersion(ctx context.Context, arg GetWorkflowVersion
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.PublishedAt,
+		&i.RowVersion,
 	)
 	return i, err
 }
@@ -236,7 +267,7 @@ const publishVersion = `-- name: PublishVersion :one
 UPDATE workflow_versions
 SET status = 'published', published_at = now()
 WHERE id = $1 AND status = 'draft'
-RETURNING id, workflow_id, version_number, status, graph_json, content_hash, created_by, created_at, published_at
+RETURNING id, workflow_id, version_number, status, graph_json, content_hash, created_by, created_at, published_at, row_version
 `
 
 // Marks the draft published; supersedes the previously published version in
@@ -254,6 +285,7 @@ func (q *Queries) PublishVersion(ctx context.Context, id pgtype.UUID) (WorkflowV
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.PublishedAt,
+		&i.RowVersion,
 	)
 	return i, err
 }
@@ -288,6 +320,44 @@ type SupersedePublishedVersionsParams struct {
 func (q *Queries) SupersedePublishedVersions(ctx context.Context, arg SupersedePublishedVersionsParams) error {
 	_, err := q.db.Exec(ctx, supersedePublishedVersions, arg.WorkflowID, arg.ID)
 	return err
+}
+
+const updateDraftGraph = `-- name: UpdateDraftGraph :one
+UPDATE workflow_versions
+SET graph_json = $3, content_hash = $4
+WHERE id = $1 AND row_version = $2 AND status = 'draft'
+RETURNING id, workflow_id, version_number, status, graph_json, content_hash, created_by, created_at, published_at, row_version
+`
+
+type UpdateDraftGraphParams struct {
+	ID          pgtype.UUID `json:"id"`
+	RowVersion  int32       `json:"row_version"`
+	GraphJson   []byte      `json:"graph_json"`
+	ContentHash []byte      `json:"content_hash"`
+}
+
+// Optimistic save: only applies when the caller's row_version matches.
+func (q *Queries) UpdateDraftGraph(ctx context.Context, arg UpdateDraftGraphParams) (WorkflowVersion, error) {
+	row := q.db.QueryRow(ctx, updateDraftGraph,
+		arg.ID,
+		arg.RowVersion,
+		arg.GraphJson,
+		arg.ContentHash,
+	)
+	var i WorkflowVersion
+	err := row.Scan(
+		&i.ID,
+		&i.WorkflowID,
+		&i.VersionNumber,
+		&i.Status,
+		&i.GraphJson,
+		&i.ContentHash,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.PublishedAt,
+		&i.RowVersion,
+	)
+	return i, err
 }
 
 const updateWorkflowMeta = `-- name: UpdateWorkflowMeta :one
