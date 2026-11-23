@@ -103,6 +103,24 @@ paths:
                 roles: [developer]
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /api/v1/templates:
+    get:
+      tags: [workflows]
+      summary: List built-in starter templates
+      description: Deterministic built-in template graphs with metadata and
+        source labeling; use `templateId` on workflow creation to instantiate.
+      operationId: listTemplates
+      parameters:
+        - $ref: "#/components/parameters/DevUser"
+      responses:
+        "200":
+          description: Template list including graph documents
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TemplateList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /api/v1/workflows:
     post:
       tags: [workflows]
@@ -279,6 +297,154 @@ paths:
           $ref: "#/components/responses/Conflict"
         "422":
           $ref: "#/components/responses/GraphInvalid"
+  /api/v1/workflows/{workflowID}/publish:
+    post:
+      tags: [workflows]
+      summary: Publish the draft as an immutable version
+      description: Atomically freezes the draft as the next published version,
+        supersedes the previously published version, points the workflow at
+        the new version and opens a fresh draft (next version number, same
+        graph). The draft graph is re-validated before publishing.
+      operationId: publishWorkflow
+      parameters:
+        - $ref: "#/components/parameters/DevUser"
+        - $ref: "#/components/parameters/WorkflowID"
+      responses:
+        "200":
+          description: Published version metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublishedVersion"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/GraphInvalid"
+  /api/v1/workflows/{workflowID}/versions:
+    get:
+      tags: [workflows]
+      summary: List version history
+      description: Every version (draft, published, superseded) newest first,
+        with change author and diff metadata (content hash, node/edge counts).
+      operationId: listVersions
+      parameters:
+        - $ref: "#/components/parameters/DevUser"
+        - $ref: "#/components/parameters/WorkflowID"
+      responses:
+        "200":
+          description: Version list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VersionList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/workflows/{workflowID}/versions/{versionNumber}:
+    get:
+      tags: [workflows]
+      summary: Get one frozen version with its graph
+      operationId: getVersion
+      parameters:
+        - $ref: "#/components/parameters/DevUser"
+        - $ref: "#/components/parameters/WorkflowID"
+        - name: versionNumber
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Version detail including the frozen graph
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VersionDetail"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/workflows/{workflowID}/versions/{versionNumber}/copy-to-draft:
+    post:
+      tags: [workflows]
+      summary: Reinitialize the draft from a frozen version
+      description: Copies any version's graph into the mutable draft. Requires
+        If-Match with the draft rowVersion so the copy never silently discards
+        concurrent edits.
+      operationId: copyVersionToDraft
+      parameters:
+        - $ref: "#/components/parameters/DevUser"
+        - $ref: "#/components/parameters/WorkflowID"
+        - name: versionNumber
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+        - name: If-Match
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Updated draft state
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DraftState"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/v1/workflows/{workflowID}/clone:
+    post:
+      tags: [workflows]
+      summary: Clone a workflow
+      description: Duplicates the workflow with fresh entity IDs; the caller
+        becomes the owner. The clone's draft starts from the source's
+        published graph, falling back to its draft.
+      operationId: cloneWorkflow
+      parameters:
+        - $ref: "#/components/parameters/DevUser"
+        - $ref: "#/components/parameters/WorkflowID"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  maxLength: 120
+                  description: Defaults to "Copy of <source name>"
+      responses:
+        "201":
+          description: Clone created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowDetail"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
 components:
   parameters:
     DevUser:
@@ -384,6 +550,90 @@ components:
           properties:
             draft:
               $ref: "#/components/schemas/DraftState"
+    VersionSummary:
+      type: object
+      required: [versionId, versionNumber, status, contentHash, createdBy, createdAt, nodeCount, edgeCount]
+      properties:
+        versionId:
+          type: string
+          format: uuid
+        versionNumber:
+          type: integer
+        status:
+          type: string
+          enum: [draft, published, superseded]
+        contentHash:
+          type: string
+        createdBy:
+          type: string
+          description: Display name of the change author
+        createdAt:
+          type: string
+          format: date-time
+        publishedAt:
+          type: string
+          format: date-time
+        nodeCount:
+          type: integer
+        edgeCount:
+          type: integer
+    VersionDetail:
+      allOf:
+        - $ref: "#/components/schemas/VersionSummary"
+        - type: object
+          required: [graph]
+          properties:
+            graph:
+              type: object
+    VersionList:
+      type: object
+      required: [versions]
+      properties:
+        versions:
+          type: array
+          items:
+            $ref: "#/components/schemas/VersionSummary"
+    PublishedVersion:
+      type: object
+      required: [versionId, versionNumber, contentHash, publishedAt]
+      properties:
+        versionId:
+          type: string
+          format: uuid
+        versionNumber:
+          type: integer
+        contentHash:
+          type: string
+        publishedAt:
+          type: string
+          format: date-time
+    Template:
+      type: object
+      required: [id, name, description, tags, source, graph]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        source:
+          type: string
+          enum: [built-in]
+        graph:
+          type: object
+    TemplateList:
+      type: object
+      required: [templates]
+      properties:
+        templates:
+          type: array
+          items:
+            $ref: "#/components/schemas/Template"
     WorkflowList:
       type: object
       required: [workflows]
@@ -404,6 +654,10 @@ components:
           type: string
         graph:
           type: object
+          description: Mutually exclusive with templateId
+        templateId:
+          type: string
+          description: Instantiate from a built-in template graph
     UpdateWorkflowRequest:
       type: object
       required: [name]

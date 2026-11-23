@@ -21,8 +21,9 @@ type fakeStore struct {
 }
 
 type storedWorkflow struct {
-	detail workflowstore.WorkflowDetail
-	owner  string
+	detail       workflowstore.WorkflowDetail
+	owner        string
+	publishCount int
 }
 
 func newFakeStore() *fakeStore {
@@ -129,6 +130,121 @@ func (f *fakeStore) SaveDraft(_ context.Context, ownerID, workflowID string, gra
 	w.detail.Draft.RowVersion++
 	draft := *w.detail.Draft
 	return &draft, nil
+}
+
+func (f *fakeStore) Publish(_ context.Context, ownerID, workflowID string) (*workflowstore.PublishedVersion, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	w, ok := f.workflows[workflowID]
+	if !ok || w.owner != ownerID {
+		return nil, workflowstore.ErrNotFound
+	}
+	if w.detail.Draft == nil {
+		return nil, workflowstore.ErrNoDraft
+	}
+	n := w.publishCount + 1
+	w.publishCount = n
+	w.detail.Draft = &workflowstore.DraftState{
+		VersionID:     "ver-new",
+		VersionNumber: int32(n + 1),
+		RowVersion:    1,
+		ContentHash:   w.detail.Draft.ContentHash,
+		Graph:         w.detail.Draft.Graph,
+	}
+	return &workflowstore.PublishedVersion{
+		VersionID:     "pub-1",
+		VersionNumber: int32(n),
+		ContentHash:   w.detail.Draft.ContentHash,
+		PublishedAt:   "2026-01-01T00:00:00Z",
+	}, nil
+}
+
+func (f *fakeStore) ListVersions(_ context.Context, ownerID, workflowID string) ([]workflowstore.VersionSummary, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	w, ok := f.workflows[workflowID]
+	if !ok || w.owner != ownerID {
+		return nil, workflowstore.ErrNotFound
+	}
+	var out []workflowstore.VersionSummary
+	for n := w.publishCount; n >= 1; n-- {
+		out = append(out, workflowstore.VersionSummary{
+			VersionID: "pub", VersionNumber: int32(n), Status: "published",
+			ContentHash: "ab", CreatedBy: "ada", CreatedAt: "2026-01-01T00:00:00Z",
+			NodeCount: 2, EdgeCount: 1,
+		})
+	}
+	if w.detail.Draft != nil {
+		out = append([]workflowstore.VersionSummary{{
+			VersionID: w.detail.Draft.VersionID, VersionNumber: w.detail.Draft.VersionNumber,
+			Status: "draft", ContentHash: w.detail.Draft.ContentHash, CreatedBy: "ada",
+			CreatedAt: "2026-01-01T00:00:00Z", NodeCount: 2, EdgeCount: 1,
+		}}, out...)
+	}
+	return out, nil
+}
+
+func (f *fakeStore) GetVersion(_ context.Context, ownerID, workflowID string, versionNumber int32) (*workflowstore.VersionDetail, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	w, ok := f.workflows[workflowID]
+	if !ok || w.owner != ownerID {
+		return nil, workflowstore.ErrNotFound
+	}
+	if w.detail.Draft == nil || w.detail.Draft.VersionNumber != versionNumber {
+		if versionNumber < 1 || versionNumber > int32(w.publishCount) {
+			return nil, workflowstore.ErrNotFound
+		}
+	}
+	return &workflowstore.VersionDetail{
+		VersionSummary: workflowstore.VersionSummary{
+			VersionID: "v", VersionNumber: versionNumber, Status: "published",
+			ContentHash: "ab", CreatedBy: "ada", CreatedAt: "2026-01-01T00:00:00Z",
+			NodeCount: 2, EdgeCount: 1,
+		},
+		Graph: w.detail.Draft.Graph,
+	}, nil
+}
+
+func (f *fakeStore) CopyVersionToDraft(_ context.Context, ownerID, workflowID string, versionNumber int32, expectedRowVersion int32) (*workflowstore.DraftState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	w, ok := f.workflows[workflowID]
+	if !ok || w.owner != ownerID {
+		return nil, workflowstore.ErrNotFound
+	}
+	if versionNumber < 1 || versionNumber > int32(w.publishCount) {
+		return nil, workflowstore.ErrNotFound
+	}
+	if w.detail.Draft.RowVersion != expectedRowVersion {
+		return nil, workflowstore.ErrConflict
+	}
+	w.detail.Draft.RowVersion++
+	draft := *w.detail.Draft
+	return &draft, nil
+}
+
+func (f *fakeStore) CloneWorkflow(_ context.Context, ownerID, sourceID, name string) (*workflowstore.WorkflowDetail, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	source, ok := f.workflows[sourceID]
+	if !ok || source.owner != ownerID {
+		return nil, workflowstore.ErrNotFound
+	}
+	id := fmt.Sprintf("wf-%d", f.nextID)
+	f.nextID++
+	detail := workflowstore.WorkflowDetail{
+		WorkflowSummary: workflowstore.WorkflowSummary{
+			ID: id, Name: name, Description: "Clone of " + source.detail.Name,
+			Status: "draft", RowVersion: 1, UpdatedAt: "2026-01-01T00:00:00Z",
+		},
+		Draft: &workflowstore.DraftState{
+			VersionID: "ver-" + id, VersionNumber: 1, RowVersion: 1,
+			ContentHash: source.detail.Draft.ContentHash, Graph: source.detail.Draft.Graph,
+		},
+	}
+	f.workflows[id] = &storedWorkflow{detail: detail, owner: ownerID}
+	return f.workflows[id].clone(), nil
 }
 
 func workflowServer(t *testing.T) (http.Handler, *fakeStore) {
@@ -256,6 +372,172 @@ func TestWorkflowValidationErrors(t *testing.T) {
 	rec = doJSON(t, h, http.MethodPut, "/api/v1/workflows/"+id+"/draft", `{"graph":`+validGraph+`}`, nil)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("missing If-Match: expected 400, got %d body %s", rec.Code, rec.Body)
+	}
+}
+
+func TestPublishWorkflow(t *testing.T) {
+	h, _ := workflowServer(t)
+	id, _ := createWorkflow(t, h)
+
+	rec := doJSON(t, h, http.MethodPost, "/api/v1/workflows/"+id+"/publish", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("publish: %d %s", rec.Code, rec.Body)
+	}
+	var published workflowstore.PublishedVersion
+	if err := json.Unmarshal(rec.Body.Bytes(), &published); err != nil {
+		t.Fatal(err)
+	}
+	if published.VersionNumber != 1 {
+		t.Fatalf("expected version 1, got %d", published.VersionNumber)
+	}
+
+	// Publishing again produces the next monotonic version.
+	rec = doJSON(t, h, http.MethodPost, "/api/v1/workflows/"+id+"/publish", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("republish: %d %s", rec.Code, rec.Body)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &published); err != nil {
+		t.Fatal(err)
+	}
+	if published.VersionNumber != 2 {
+		t.Fatalf("expected version 2, got %d", published.VersionNumber)
+	}
+
+	rec = doJSON(t, h, http.MethodPost, "/api/v1/workflows/missing/publish", "", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("publish missing: expected 404, got %d", rec.Code)
+	}
+}
+
+func TestVersionHistory(t *testing.T) {
+	h, _ := workflowServer(t)
+	id, _ := createWorkflow(t, h)
+	doJSON(t, h, http.MethodPost, "/api/v1/workflows/"+id+"/publish", "", nil)
+
+	rec := doJSON(t, h, http.MethodGet, "/api/v1/workflows/"+id+"/versions", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list versions: %d %s", rec.Code, rec.Body)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"versionNumber":2`) || !strings.Contains(body, `"versionNumber":1`) {
+		t.Fatalf("expected draft v2 and published v1 in %s", body)
+	}
+	if !strings.Contains(body, `"createdBy":"ada"`) {
+		t.Fatalf("expected author in %s", body)
+	}
+
+	rec = doJSON(t, h, http.MethodGet, "/api/v1/workflows/"+id+"/versions/1", "", nil)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"graph"`) {
+		t.Fatalf("get version: %d %s", rec.Code, rec.Body)
+	}
+
+	rec = doJSON(t, h, http.MethodGet, "/api/v1/workflows/"+id+"/versions/99", "", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("missing version: expected 404, got %d", rec.Code)
+	}
+
+	rec = doJSON(t, h, http.MethodGet, "/api/v1/workflows/"+id+"/versions/abc", "", nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad version number: expected 400, got %d", rec.Code)
+	}
+}
+
+func TestCopyVersionToDraft(t *testing.T) {
+	h, _ := workflowServer(t)
+	id, _ := createWorkflow(t, h)
+	doJSON(t, h, http.MethodPost, "/api/v1/workflows/"+id+"/publish", "", nil)
+
+	// The fake reopens the draft at rowVersion 1 after publish.
+	rec := doJSON(t, h, http.MethodPost, "/api/v1/workflows/"+id+"/versions/1/copy-to-draft", "", map[string]string{"If-Match": `"1"`})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("copy: %d %s", rec.Code, rec.Body)
+	}
+	if rec.Header().Get("ETag") != `"2"` {
+		t.Fatalf("expected advanced ETag, got %q", rec.Header().Get("ETag"))
+	}
+
+	rec = doJSON(t, h, http.MethodPost, "/api/v1/workflows/"+id+"/versions/1/copy-to-draft", "", map[string]string{"If-Match": `"1"`})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("stale copy: expected 409, got %d", rec.Code)
+	}
+
+	rec = doJSON(t, h, http.MethodPost, "/api/v1/workflows/"+id+"/versions/99/copy-to-draft", "", map[string]string{"If-Match": `"2"`})
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("missing version: expected 404, got %d", rec.Code)
+	}
+}
+
+func TestCloneWorkflow(t *testing.T) {
+	h, _ := workflowServer(t)
+	id, _ := createWorkflow(t, h)
+
+	rec := doJSON(t, h, http.MethodPost, "/api/v1/workflows/"+id+"/clone", `{}`, nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("clone: %d %s", rec.Code, rec.Body)
+	}
+	var clone workflowstore.WorkflowDetail
+	if err := json.Unmarshal(rec.Body.Bytes(), &clone); err != nil {
+		t.Fatal(err)
+	}
+	if clone.ID == id {
+		t.Fatal("clone must have a fresh workflow ID")
+	}
+	if clone.Name != "Copy of My flow" {
+		t.Fatalf("unexpected default name %q", clone.Name)
+	}
+	if clone.Draft == nil || clone.Draft.VersionID == "" {
+		t.Fatal("clone must carry a fresh draft version")
+	}
+
+	rec = doJSON(t, h, http.MethodPost, "/api/v1/workflows/"+id+"/clone", `{"name":"Named clone"}`, nil)
+	if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), "Named clone") {
+		t.Fatalf("named clone: %d %s", rec.Code, rec.Body)
+	}
+
+	rec = doJSON(t, h, http.MethodPost, "/api/v1/workflows/missing/clone", `{}`, nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("clone missing: expected 404, got %d", rec.Code)
+	}
+}
+
+func TestListTemplates(t *testing.T) {
+	h, _ := workflowServer(t)
+	rec := doJSON(t, h, http.MethodGet, "/api/v1/templates", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list templates: %d %s", rec.Code, rec.Body)
+	}
+	body := rec.Body.String()
+	for _, id := range []string{"invoice-approval", "parallel-service-request", "incident-escalation"} {
+		if !strings.Contains(body, id) {
+			t.Fatalf("expected template %q in %s", id, body)
+		}
+	}
+	if !strings.Contains(body, `"source":"built-in"`) {
+		t.Fatalf("expected source labeling in %s", body)
+	}
+}
+
+func TestCreateWorkflowFromTemplate(t *testing.T) {
+	h, _ := workflowServer(t)
+	rec := doJSON(t, h, http.MethodPost, "/api/v1/workflows",
+		`{"name":"From template","templateId":"invoice-approval"}`, nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create from template: %d %s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "invoice.fetch") {
+		t.Fatalf("expected template graph in draft, got %s", rec.Body)
+	}
+
+	rec = doJSON(t, h, http.MethodPost, "/api/v1/workflows",
+		`{"name":"Bad","templateId":"nope"}`, nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown template: expected 404, got %d", rec.Code)
+	}
+
+	rec = doJSON(t, h, http.MethodPost, "/api/v1/workflows",
+		`{"name":"Both","templateId":"invoice-approval","graph":{}}`, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("graph+template: expected 400, got %d", rec.Code)
 	}
 }
 

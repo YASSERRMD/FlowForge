@@ -58,6 +58,38 @@ export interface WorkflowDetail extends WorkflowSummary {
   draft?: DraftState;
 }
 
+export interface VersionSummary {
+  versionId: string;
+  versionNumber: number;
+  status: "draft" | "published" | "superseded";
+  contentHash: string;
+  createdBy: string;
+  createdAt: string;
+  publishedAt?: string;
+  nodeCount: number;
+  edgeCount: number;
+}
+
+export interface VersionDetail extends VersionSummary {
+  graph: unknown;
+}
+
+export interface Template {
+  id: string;
+  name: string;
+  description: string;
+  tags: string[];
+  source: "built-in";
+  graph: unknown;
+}
+
+export interface PublishedVersion {
+  versionId: string;
+  versionNumber: number;
+  contentHash: string;
+  publishedAt: string;
+}
+
 export interface ClientOptions {
   baseUrl: string;
   /** Development-only identity header (APP_ENV=development, AUTH_DEV_MODE=true). */
@@ -148,10 +180,16 @@ export class ApiClient {
     return data.workflows;
   }
 
+  async listTemplates(): Promise<Template[]> {
+    const { data } = await this.request<{ templates: Template[] }>("/api/v1/templates");
+    return data.templates;
+  }
+
   async createWorkflow(input: {
     name: string;
     description?: string;
     graph?: unknown;
+    templateId?: string;
   }): Promise<{ workflow: WorkflowDetail; etag: string | null }> {
     const { data, etag } = await this.request<WorkflowDetail>("/api/v1/workflows", {
       method: "POST",
@@ -180,10 +218,54 @@ export class ApiClient {
     await this.request<void>(`/api/v1/workflows/${id}`, { method: "DELETE" });
   }
 
+  /** Duplicates a workflow with fresh entity IDs; the caller owns the clone. */
+  async cloneWorkflow(id: string, name?: string): Promise<WorkflowDetail> {
+    const { data } = await this.request<WorkflowDetail>(`/api/v1/workflows/${id}/clone`, {
+      method: "POST",
+      body: name ? { name } : {},
+    });
+    return data;
+  }
+
   /**
    * Saves the draft graph. `ifMatch` is the draft rowVersion the caller last
    * read; the server answers 409 (ApiError.isConflict) when it is stale.
    */
+  async publish(id: string): Promise<PublishedVersion> {
+    const { data } = await this.request<PublishedVersion>(
+      `/api/v1/workflows/${id}/publish`,
+      { method: "POST" },
+    );
+    return data;
+  }
+
+  async listVersions(id: string): Promise<VersionSummary[]> {
+    const { data } = await this.request<{ versions: VersionSummary[] }>(
+      `/api/v1/workflows/${id}/versions`,
+    );
+    return data.versions;
+  }
+
+  async getVersion(id: string, versionNumber: number): Promise<VersionDetail> {
+    const { data } = await this.request<VersionDetail>(
+      `/api/v1/workflows/${id}/versions/${versionNumber}`,
+    );
+    return data;
+  }
+
+  /** Reinitializes the draft from a frozen version (If-Match guarded). */
+  async copyVersionToDraft(
+    id: string,
+    versionNumber: number,
+    ifMatch: number | string,
+  ): Promise<{ draft: DraftState; etag: string | null }> {
+    const { data, etag } = await this.request<DraftState>(
+      `/api/v1/workflows/${id}/versions/${versionNumber}/copy-to-draft`,
+      { method: "POST", ifMatch },
+    );
+    return { draft: data, etag };
+  }
+
   async saveDraft(
     id: string,
     graph: unknown,

@@ -11,6 +11,15 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const activateWorkflow = `-- name: ActivateWorkflow :exec
+UPDATE workflows SET status = 'active', updated_at = now() WHERE id = $1
+`
+
+func (q *Queries) ActivateWorkflow(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, activateWorkflow, id)
+	return err
+}
+
 const archiveWorkflow = `-- name: ArchiveWorkflow :one
 UPDATE workflows
 SET status = 'archived', archived_at = now(), updated_at = now()
@@ -128,6 +137,74 @@ func (q *Queries) GetDraftVersion(ctx context.Context, workflowID pgtype.UUID) (
 	return i, err
 }
 
+const getPublishedVersion = `-- name: GetPublishedVersion :one
+SELECT id, workflow_id, version_number, status, graph_json, content_hash, created_by, created_at, published_at, row_version FROM workflow_versions
+WHERE workflow_id = $1 AND status = 'published'
+`
+
+func (q *Queries) GetPublishedVersion(ctx context.Context, workflowID pgtype.UUID) (WorkflowVersion, error) {
+	row := q.db.QueryRow(ctx, getPublishedVersion, workflowID)
+	var i WorkflowVersion
+	err := row.Scan(
+		&i.ID,
+		&i.WorkflowID,
+		&i.VersionNumber,
+		&i.Status,
+		&i.GraphJson,
+		&i.ContentHash,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.PublishedAt,
+		&i.RowVersion,
+	)
+	return i, err
+}
+
+const getVersionWithAuthor = `-- name: GetVersionWithAuthor :one
+SELECT v.id, v.workflow_id, v.version_number, v.status, v.graph_json, v.content_hash, v.created_by, v.created_at, v.published_at, v.row_version, u.display_name AS created_by_name
+FROM workflow_versions v
+JOIN users u ON u.id = v.created_by
+WHERE v.workflow_id = $1 AND v.version_number = $2
+`
+
+type GetVersionWithAuthorParams struct {
+	WorkflowID    pgtype.UUID `json:"workflow_id"`
+	VersionNumber int32       `json:"version_number"`
+}
+
+type GetVersionWithAuthorRow struct {
+	ID            pgtype.UUID        `json:"id"`
+	WorkflowID    pgtype.UUID        `json:"workflow_id"`
+	VersionNumber int32              `json:"version_number"`
+	Status        string             `json:"status"`
+	GraphJson     []byte             `json:"graph_json"`
+	ContentHash   []byte             `json:"content_hash"`
+	CreatedBy     pgtype.UUID        `json:"created_by"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	PublishedAt   pgtype.Timestamptz `json:"published_at"`
+	RowVersion    int32              `json:"row_version"`
+	CreatedByName string             `json:"created_by_name"`
+}
+
+func (q *Queries) GetVersionWithAuthor(ctx context.Context, arg GetVersionWithAuthorParams) (GetVersionWithAuthorRow, error) {
+	row := q.db.QueryRow(ctx, getVersionWithAuthor, arg.WorkflowID, arg.VersionNumber)
+	var i GetVersionWithAuthorRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkflowID,
+		&i.VersionNumber,
+		&i.Status,
+		&i.GraphJson,
+		&i.ContentHash,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.PublishedAt,
+		&i.RowVersion,
+		&i.CreatedByName,
+	)
+	return i, err
+}
+
 const getWorkflow = `-- name: GetWorkflow :one
 SELECT id, owner_id, name, description, status, current_version_id, created_at, updated_at, archived_at, row_version FROM workflows WHERE id = $1
 `
@@ -204,6 +281,97 @@ func (q *Queries) GetWorkflowVersion(ctx context.Context, arg GetWorkflowVersion
 		&i.RowVersion,
 	)
 	return i, err
+}
+
+const listVersionsWithAuthor = `-- name: ListVersionsWithAuthor :many
+SELECT v.id, v.workflow_id, v.version_number, v.status, v.graph_json, v.content_hash, v.created_by, v.created_at, v.published_at, v.row_version, u.display_name AS created_by_name
+FROM workflow_versions v
+JOIN users u ON u.id = v.created_by
+WHERE v.workflow_id = $1
+ORDER BY v.version_number DESC
+`
+
+type ListVersionsWithAuthorRow struct {
+	ID            pgtype.UUID        `json:"id"`
+	WorkflowID    pgtype.UUID        `json:"workflow_id"`
+	VersionNumber int32              `json:"version_number"`
+	Status        string             `json:"status"`
+	GraphJson     []byte             `json:"graph_json"`
+	ContentHash   []byte             `json:"content_hash"`
+	CreatedBy     pgtype.UUID        `json:"created_by"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	PublishedAt   pgtype.Timestamptz `json:"published_at"`
+	RowVersion    int32              `json:"row_version"`
+	CreatedByName string             `json:"created_by_name"`
+}
+
+func (q *Queries) ListVersionsWithAuthor(ctx context.Context, workflowID pgtype.UUID) ([]ListVersionsWithAuthorRow, error) {
+	rows, err := q.db.Query(ctx, listVersionsWithAuthor, workflowID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListVersionsWithAuthorRow
+	for rows.Next() {
+		var i ListVersionsWithAuthorRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkflowID,
+			&i.VersionNumber,
+			&i.Status,
+			&i.GraphJson,
+			&i.ContentHash,
+			&i.CreatedBy,
+			&i.CreatedAt,
+			&i.PublishedAt,
+			&i.RowVersion,
+			&i.CreatedByName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWorkflowVersions = `-- name: ListWorkflowVersions :many
+SELECT id, workflow_id, version_number, status, graph_json, content_hash, created_by, created_at, published_at, row_version FROM workflow_versions
+WHERE workflow_id = $1
+ORDER BY version_number DESC
+`
+
+func (q *Queries) ListWorkflowVersions(ctx context.Context, workflowID pgtype.UUID) ([]WorkflowVersion, error) {
+	rows, err := q.db.Query(ctx, listWorkflowVersions, workflowID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []WorkflowVersion
+	for rows.Next() {
+		var i WorkflowVersion
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkflowID,
+			&i.VersionNumber,
+			&i.Status,
+			&i.GraphJson,
+			&i.ContentHash,
+			&i.CreatedBy,
+			&i.CreatedAt,
+			&i.PublishedAt,
+			&i.RowVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listWorkflowsByOwner = `-- name: ListWorkflowsByOwner :many

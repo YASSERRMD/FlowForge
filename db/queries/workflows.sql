@@ -71,3 +71,28 @@ UPDATE workflow_versions
 SET graph_json = $3, content_hash = $4
 WHERE id = $1 AND row_version = $2 AND status = 'draft'
 RETURNING *;
+
+-- name: ListWorkflowVersions :many
+SELECT * FROM workflow_versions
+WHERE workflow_id = $1
+ORDER BY version_number DESC;
+
+-- name: ActivateWorkflow :exec
+UPDATE workflows SET status = 'active', updated_at = now() WHERE id = $1;
+
+-- name: GetPublishedVersion :one
+SELECT * FROM workflow_versions
+WHERE workflow_id = $1 AND status = 'published';
+
+-- name: ListVersionsWithAuthor :many
+SELECT v.*, u.display_name AS created_by_name
+FROM workflow_versions v
+JOIN users u ON u.id = v.created_by
+WHERE v.workflow_id = $1
+ORDER BY v.version_number DESC;
+
+-- name: GetVersionWithAuthor :one
+SELECT v.*, u.display_name AS created_by_name
+FROM workflow_versions v
+JOIN users u ON u.id = v.created_by
+WHERE v.workflow_id = $1 AND v.version_number = $2;
