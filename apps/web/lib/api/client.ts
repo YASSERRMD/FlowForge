@@ -229,6 +229,19 @@ export class ApiClient {
     return data;
   }
 
+  /** Reinitializes the draft from a frozen version (If-Match guarded). */
+  async copyVersionToDraft(
+    id: string,
+    versionNumber: number,
+    ifMatch: number | string,
+  ): Promise<{ draft: DraftState; etag: string | null }> {
+    const { data, etag } = await this.request<DraftState>(
+      `/api/v1/workflows/${id}/versions/${versionNumber}/copy-to-draft`,
+      { method: "POST", ifMatch },
+    );
+    return { draft: data, etag };
+  }
+
   async saveDraft(
     id: string,
     graph: unknown,

@@ -147,6 +147,52 @@ func TestStorePublishTransaction(t *testing.T) {
 	}
 }
 
+func TestStoreCopyVersionToDraft(t *testing.T) {
+	store := freshStore(t)
+	ctx := context.Background()
+
+	owner, _ := store.EnsureUser(ctx, "dev-ada@dev.flowforge.local", "ada")
+	hash := sha256.Sum256([]byte(testGraph))
+	detail, err := store.CreateWorkflow(ctx, owner, "Restorable", "", json.RawMessage(testGraph), hash[:])
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := store.Publish(ctx, owner, detail.ID); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	// Edit the draft to something else, then restore v1 into it.
+	other := `{"schemaVersion":"1","nodes":[{"id":"start-1","kind":"start","label":"S"},{"id":"end-1","kind":"end","label":"E"}],"edges":[{"id":"e-1","source":"start-1","target":"end-1"}]}`
+	otherHash := sha256.Sum256([]byte(other))
+	current, err := store.GetWorkflow(ctx, owner, detail.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SaveDraft(ctx, owner, detail.ID, json.RawMessage(other), otherHash[:], current.Draft.RowVersion); err != nil {
+		t.Fatalf("save other: %v", err)
+	}
+	current, _ = store.GetWorkflow(ctx, owner, detail.ID)
+	restored, err := store.CopyVersionToDraft(ctx, owner, detail.ID, 1, current.Draft.RowVersion)
+	if err != nil {
+		t.Fatalf("copy: %v", err)
+	}
+	var want, got map[string]any
+	if err := json.Unmarshal([]byte(testGraph), &want); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(restored.Graph, &got); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprintf("%v", want) != fmt.Sprintf("%v", got) {
+		t.Fatalf("expected v1 graph restored, got %s", restored.Graph)
+	}
+
+	// Stale token still conflicts on the copy path.
+	if _, err := store.CopyVersionToDraft(ctx, owner, detail.ID, 1, 1); err == nil {
+		t.Fatal("expected conflict on stale row version")
+	}
+}
+
 func TestStoreOwnerIsolation(t *testing.T) {
 	store := freshStore(t)
 	ctx := context.Background()

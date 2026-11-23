@@ -431,6 +431,43 @@ func (s *Store) GetVersion(ctx context.Context, ownerID, workflowID string, vers
 	}, nil
 }
 
+// CopyVersionToDraft reinitializes the mutable draft from any frozen
+// version, guarded by the draft's row_version like a normal save.
+func (s *Store) CopyVersionToDraft(ctx context.Context, ownerID, workflowID string, versionNumber int32, expectedRowVersion int32) (*DraftState, error) {
+	detail, err := s.GetWorkflow(ctx, ownerID, workflowID)
+	if err != nil {
+		return nil, err
+	}
+	if detail.Draft == nil {
+		return nil, ErrNoDraft
+	}
+	wfID, _ := parseUUID(detail.ID)
+	source, err := dbgen.New(s.pool).GetVersionWithAuthor(ctx, dbgen.GetVersionWithAuthorParams{
+		WorkflowID:    wfID,
+		VersionNumber: versionNumber,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("get source version: %w", err)
+	}
+	draftID, _ := parseUUID(detail.Draft.VersionID)
+	version, err := dbgen.New(s.pool).UpdateDraftGraph(ctx, dbgen.UpdateDraftGraphParams{
+		ID:          draftID,
+		RowVersion:  expectedRowVersion,
+		GraphJson:   source.GraphJson,
+		ContentHash: source.ContentHash,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrConflict
+		}
+		return nil, fmt.Errorf("copy version to draft: %w", err)
+	}
+	return draftOf(version), nil
+}
+
 // SaveDraft replaces the draft graph, guarded by the row_version the caller
 // last read. A stale token yields ErrConflict.
 func (s *Store) SaveDraft(ctx context.Context, ownerID, workflowID string, graph json.RawMessage, contentHash []byte, expectedRowVersion int32) (*DraftState, error) {

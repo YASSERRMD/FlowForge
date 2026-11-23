@@ -30,6 +30,7 @@ type WorkflowStore interface {
 	Publish(ctx context.Context, ownerID, workflowID string) (*workflowstore.PublishedVersion, error)
 	ListVersions(ctx context.Context, ownerID, workflowID string) ([]workflowstore.VersionSummary, error)
 	GetVersion(ctx context.Context, ownerID, workflowID string, versionNumber int32) (*workflowstore.VersionDetail, error)
+	CopyVersionToDraft(ctx context.Context, ownerID, workflowID string, versionNumber int32, expectedRowVersion int32) (*workflowstore.DraftState, error)
 }
 
 // maxWorkflowBody bounds workflow payloads (a 200-node graph with configs
@@ -328,6 +329,33 @@ func (s *Server) handleGetVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	apierror.JSON(w, http.StatusOK, detail)
+}
+
+// handleCopyVersionToDraft reinitializes the draft from a frozen version.
+// Requires If-Match like a draft save so the copy never silently discards
+// concurrent edits.
+func (s *Server) handleCopyVersionToDraft(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := s.ownerOrError(w, r)
+	if !ok {
+		return
+	}
+	expected, err := parseIfMatch(r.Header.Get("If-Match"))
+	if err != nil {
+		apierror.Write(w, r, s.log, fieldError("If-Match", `If-Match must carry the draft rowVersion, e.g. "3"`))
+		return
+	}
+	n, err := strconv.ParseInt(chi.URLParam(r, "versionNumber"), 10, 32)
+	if err != nil || n < 1 {
+		apierror.Write(w, r, s.log, fieldError("versionNumber", "versionNumber must be a positive integer"))
+		return
+	}
+	draft, err := s.workflows.CopyVersionToDraft(r.Context(), ownerID, chi.URLParam(r, "workflowID"), int32(n), expected)
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	w.Header().Set("ETag", draftETag(draft))
+	apierror.JSON(w, http.StatusOK, draft)
 }
 
 // validateGraphPayload parses and structurally validates a graph document,

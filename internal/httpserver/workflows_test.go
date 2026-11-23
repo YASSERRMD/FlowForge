@@ -206,6 +206,24 @@ func (f *fakeStore) GetVersion(_ context.Context, ownerID, workflowID string, ve
 	}, nil
 }
 
+func (f *fakeStore) CopyVersionToDraft(_ context.Context, ownerID, workflowID string, versionNumber int32, expectedRowVersion int32) (*workflowstore.DraftState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	w, ok := f.workflows[workflowID]
+	if !ok || w.owner != ownerID {
+		return nil, workflowstore.ErrNotFound
+	}
+	if versionNumber < 1 || versionNumber > int32(w.publishCount) {
+		return nil, workflowstore.ErrNotFound
+	}
+	if w.detail.Draft.RowVersion != expectedRowVersion {
+		return nil, workflowstore.ErrConflict
+	}
+	w.detail.Draft.RowVersion++
+	draft := *w.detail.Draft
+	return &draft, nil
+}
+
 func workflowServer(t *testing.T) (http.Handler, *fakeStore) {
 	t.Helper()
 	cfg := testConfig()
@@ -398,6 +416,31 @@ func TestVersionHistory(t *testing.T) {
 	rec = doJSON(t, h, http.MethodGet, "/api/v1/workflows/"+id+"/versions/abc", "", nil)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("bad version number: expected 400, got %d", rec.Code)
+	}
+}
+
+func TestCopyVersionToDraft(t *testing.T) {
+	h, _ := workflowServer(t)
+	id, _ := createWorkflow(t, h)
+	doJSON(t, h, http.MethodPost, "/api/v1/workflows/"+id+"/publish", "", nil)
+
+	// The fake reopens the draft at rowVersion 1 after publish.
+	rec := doJSON(t, h, http.MethodPost, "/api/v1/workflows/"+id+"/versions/1/copy-to-draft", "", map[string]string{"If-Match": `"1"`})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("copy: %d %s", rec.Code, rec.Body)
+	}
+	if rec.Header().Get("ETag") != `"2"` {
+		t.Fatalf("expected advanced ETag, got %q", rec.Header().Get("ETag"))
+	}
+
+	rec = doJSON(t, h, http.MethodPost, "/api/v1/workflows/"+id+"/versions/1/copy-to-draft", "", map[string]string{"If-Match": `"1"`})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("stale copy: expected 409, got %d", rec.Code)
+	}
+
+	rec = doJSON(t, h, http.MethodPost, "/api/v1/workflows/"+id+"/versions/99/copy-to-draft", "", map[string]string{"If-Match": `"2"`})
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("missing version: expected 404, got %d", rec.Code)
 	}
 }
 
