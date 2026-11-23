@@ -259,6 +259,21 @@ func TestWorkflowValidationErrors(t *testing.T) {
 	}
 }
 
+func TestWorkflowRejectsOversizedBody(t *testing.T) {
+	h, _ := workflowServer(t)
+	// 256 KiB cap: a graph document padded beyond the limit must be rejected
+	// with body_too_large before any parsing happens.
+	padding := strings.Repeat(" ", 257*1024)
+	body := `{"name":"` + padding + `"}`
+	rec := doJSON(t, h, http.MethodPost, "/api/v1/workflows", body, nil)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d body %.200s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "body_too_large") {
+		t.Fatalf("expected body_too_large code in %s", rec.Body)
+	}
+}
+
 func TestWorkflowsRequireStore(t *testing.T) {
 	cfg := testConfig()
 	cfg.DevAuthEnabled = true

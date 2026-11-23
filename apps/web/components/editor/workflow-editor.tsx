@@ -17,6 +17,7 @@ import { useEditorStore } from "@/lib/editor/store";
 import type { NodeKind } from "@/lib/editor/types";
 import { nodeTypes } from "./nodes";
 import { NodeConfigPanel } from "./config-panel";
+import { ImportExportControls } from "./import-export";
 import { ValidationInspector } from "./validation-inspector";
 import { NodePalette, DND_MIME } from "./palette";
 import { useEditorKeyboard } from "./use-editor-keyboard";
@@ -47,7 +48,10 @@ function Canvas() {
 
   return (
     <div className="flex flex-col gap-3">
-      <NodePalette onAdd={(kind) => addAt(kind)} />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <NodePalette onAdd={(kind) => addAt(kind)} />
+        <ImportExportControls />
+      </div>
       <div className="flex items-start gap-3">
         <div
           ref={wrapper}
