@@ -106,6 +106,47 @@ func TestStoreRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStorePublishTransaction(t *testing.T) {
+	store := freshStore(t)
+	ctx := context.Background()
+
+	owner, _ := store.EnsureUser(ctx, "dev-ada@dev.flowforge.local", "ada")
+	hash := sha256.Sum256([]byte(testGraph))
+	detail, err := store.CreateWorkflow(ctx, owner, "Publishable", "", json.RawMessage(testGraph), hash[:])
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	pub, err := store.Publish(ctx, owner, detail.ID)
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if pub.VersionNumber != 1 {
+		t.Fatalf("expected version 1, got %d", pub.VersionNumber)
+	}
+
+	// A fresh draft (v2) reopens with the published graph.
+	after, err := store.GetWorkflow(ctx, owner, detail.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if after.Draft == nil || after.Draft.VersionNumber != 2 || after.Draft.RowVersion != 1 {
+		t.Fatalf("expected fresh draft v2, got %+v", after.Draft)
+	}
+	if after.Status != "active" {
+		t.Fatalf("expected active workflow, got %q", after.Status)
+	}
+
+	// Second publish supersedes the first.
+	pub2, err := store.Publish(ctx, owner, detail.ID)
+	if err != nil {
+		t.Fatalf("republish: %v", err)
+	}
+	if pub2.VersionNumber != 2 {
+		t.Fatalf("expected version 2, got %d", pub2.VersionNumber)
+	}
+}
+
 func TestStoreOwnerIsolation(t *testing.T) {
 	store := freshStore(t)
 	ctx := context.Background()

@@ -279,6 +279,33 @@ paths:
           $ref: "#/components/responses/Conflict"
         "422":
           $ref: "#/components/responses/GraphInvalid"
+  /api/v1/workflows/{workflowID}/publish:
+    post:
+      tags: [workflows]
+      summary: Publish the draft as an immutable version
+      description: Atomically freezes the draft as the next published version,
+        supersedes the previously published version, points the workflow at
+        the new version and opens a fresh draft (next version number, same
+        graph). The draft graph is re-validated before publishing.
+      operationId: publishWorkflow
+      parameters:
+        - $ref: "#/components/parameters/DevUser"
+        - $ref: "#/components/parameters/WorkflowID"
+      responses:
+        "200":
+          description: Published version metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublishedVersion"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/GraphInvalid"
 components:
   parameters:
     DevUser:
@@ -384,6 +411,20 @@ components:
           properties:
             draft:
               $ref: "#/components/schemas/DraftState"
+    PublishedVersion:
+      type: object
+      required: [versionId, versionNumber, contentHash, publishedAt]
+      properties:
+        versionId:
+          type: string
+          format: uuid
+        versionNumber:
+          type: integer
+        contentHash:
+          type: string
+        publishedAt:
+          type: string
+          format: date-time
     WorkflowList:
       type: object
       required: [workflows]

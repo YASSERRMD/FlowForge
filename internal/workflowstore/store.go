@@ -19,7 +19,16 @@ import (
 var (
 	ErrNotFound = errors.New("workflow not found")
 	ErrConflict = errors.New("workflow changed since it was read")
+	ErrNoDraft  = errors.New("workflow has no draft to publish")
 )
+
+// PublishedVersion is the frozen result of a publish.
+type PublishedVersion struct {
+	VersionID     string `json:"versionId"`
+	VersionNumber int32  `json:"versionNumber"`
+	ContentHash   string `json:"contentHash"`
+	PublishedAt   string `json:"publishedAt"`
+}
 
 // WorkflowSummary is the list view of a workflow.
 type WorkflowSummary struct {
@@ -232,6 +241,82 @@ func (s *Store) ArchiveWorkflow(ctx context.Context, ownerID, id string) error {
 		return fmt.Errorf("archive workflow: %w", err)
 	}
 	return nil
+}
+
+// Publish freezes the current draft as a published version in one
+// transaction: the draft becomes published, any previously published version
+// is superseded, the workflow points at the new version, and a fresh draft
+// (next version number, same graph) is opened for further editing.
+func (s *Store) Publish(ctx context.Context, ownerID, workflowID string) (*PublishedVersion, error) {
+	detail, err := s.GetWorkflow(ctx, ownerID, workflowID)
+	if err != nil {
+		return nil, err
+	}
+	if detail.Draft == nil {
+		return nil, ErrNoDraft
+	}
+	wfID, _ := parseUUID(detail.ID)
+	draftID, _ := parseUUID(detail.Draft.VersionID)
+	owner, _ := parseUUID(ownerID)
+
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	q := dbgen.New(tx)
+	published, err := q.PublishVersion(ctx, draftID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNoDraft
+		}
+		return nil, fmt.Errorf("publish version: %w", err)
+	}
+	if err := q.SupersedePublishedVersions(ctx, dbgen.SupersedePublishedVersionsParams{
+		WorkflowID: wfID,
+		ID:         published.ID,
+	}); err != nil {
+		return nil, fmt.Errorf("supersede previous versions: %w", err)
+	}
+	if err := q.SetWorkflowCurrentVersion(ctx, dbgen.SetWorkflowCurrentVersionParams{
+		ID:               wfID,
+		CurrentVersionID: published.ID,
+	}); err != nil {
+		return nil, fmt.Errorf("set current version: %w", err)
+	}
+	if err := q.ActivateWorkflow(ctx, wfID); err != nil {
+		return nil, fmt.Errorf("activate workflow: %w", err)
+	}
+
+	next, err := q.NextVersionNumber(ctx, wfID)
+	if err != nil {
+		return nil, fmt.Errorf("next version number: %w", err)
+	}
+	if _, err := q.CreateWorkflowVersion(ctx, dbgen.CreateWorkflowVersionParams{
+		WorkflowID:    wfID,
+		VersionNumber: next,
+		GraphJson:     published.GraphJson,
+		ContentHash:   published.ContentHash,
+		CreatedBy:     owner,
+	}); err != nil {
+		return nil, fmt.Errorf("open next draft: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+
+	publishedAt := ""
+	if published.PublishedAt.Valid {
+		publishedAt = published.PublishedAt.Time.UTC().Format("2006-01-02T15:04:05.999999999Z07:00")
+	}
+	return &PublishedVersion{
+		VersionID:     uuidOf(published.ID),
+		VersionNumber: published.VersionNumber,
+		ContentHash:   fmt.Sprintf("%x", published.ContentHash),
+		PublishedAt:   publishedAt,
+	}, nil
 }
 
 // SaveDraft replaces the draft graph, guarded by the row_version the caller

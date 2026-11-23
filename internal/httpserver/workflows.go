@@ -27,6 +27,7 @@ type WorkflowStore interface {
 	UpdateWorkflowMeta(ctx context.Context, ownerID, id, name, description string) (*workflowstore.WorkflowSummary, error)
 	ArchiveWorkflow(ctx context.Context, ownerID, id string) error
 	SaveDraft(ctx context.Context, ownerID, workflowID string, graphJSON json.RawMessage, contentHash []byte, expectedRowVersion int32) (*workflowstore.DraftState, error)
+	Publish(ctx context.Context, ownerID, workflowID string) (*workflowstore.PublishedVersion, error)
 }
 
 // maxWorkflowBody bounds workflow payloads (a 200-node graph with configs
@@ -74,6 +75,9 @@ func (s *Server) writeStoreError(w http.ResponseWriter, r *http.Request, err err
 	switch {
 	case errors.Is(err, workflowstore.ErrNotFound):
 		apierror.Write(w, r, s.log, apierror.New(apierror.CodeNotFound, "workflow not found"))
+	case errors.Is(err, workflowstore.ErrNoDraft):
+		apierror.Write(w, r, s.log, apierror.New(apierror.CodeConflict,
+			"workflow has no draft to publish"))
 	case errors.Is(err, workflowstore.ErrConflict):
 		apierror.Write(w, r, s.log, apierror.New(apierror.CodeConflict,
 			"the workflow changed since you loaded it; reload and try again"))
@@ -259,6 +263,38 @@ func (s *Server) handleSaveDraft(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("ETag", draftETag(draft))
 	apierror.JSON(w, http.StatusOK, draft)
+}
+
+// handlePublish freezes the draft as an immutable published version. The
+// draft graph is re-validated before publishing so a published snapshot is
+// always structurally sound.
+func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := s.ownerOrError(w, r)
+	if !ok {
+		return
+	}
+	workflowID := chi.URLParam(r, "workflowID")
+
+	detail, err := s.workflows.GetWorkflow(r.Context(), ownerID, workflowID)
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	if detail.Draft == nil {
+		apierror.Write(w, r, s.log, apierror.New(apierror.CodeConflict,
+			"workflow has no draft to publish"))
+		return
+	}
+	if !s.validateGraphPayload(w, r, detail.Draft.Graph) {
+		return
+	}
+
+	published, err := s.workflows.Publish(r.Context(), ownerID, workflowID)
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	apierror.JSON(w, http.StatusOK, published)
 }
 
 // validateGraphPayload parses and structurally validates a graph document,

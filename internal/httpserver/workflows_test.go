@@ -21,8 +21,9 @@ type fakeStore struct {
 }
 
 type storedWorkflow struct {
-	detail workflowstore.WorkflowDetail
-	owner  string
+	detail       workflowstore.WorkflowDetail
+	owner        string
+	publishCount int
 }
 
 func newFakeStore() *fakeStore {
@@ -129,6 +130,33 @@ func (f *fakeStore) SaveDraft(_ context.Context, ownerID, workflowID string, gra
 	w.detail.Draft.RowVersion++
 	draft := *w.detail.Draft
 	return &draft, nil
+}
+
+func (f *fakeStore) Publish(_ context.Context, ownerID, workflowID string) (*workflowstore.PublishedVersion, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	w, ok := f.workflows[workflowID]
+	if !ok || w.owner != ownerID {
+		return nil, workflowstore.ErrNotFound
+	}
+	if w.detail.Draft == nil {
+		return nil, workflowstore.ErrNoDraft
+	}
+	n := w.publishCount + 1
+	w.publishCount = n
+	w.detail.Draft = &workflowstore.DraftState{
+		VersionID:     "ver-new",
+		VersionNumber: int32(n + 1),
+		RowVersion:    1,
+		ContentHash:   w.detail.Draft.ContentHash,
+		Graph:         w.detail.Draft.Graph,
+	}
+	return &workflowstore.PublishedVersion{
+		VersionID:     "pub-1",
+		VersionNumber: int32(n),
+		ContentHash:   w.detail.Draft.ContentHash,
+		PublishedAt:   "2026-01-01T00:00:00Z",
+	}, nil
 }
 
 func workflowServer(t *testing.T) (http.Handler, *fakeStore) {
@@ -256,6 +284,40 @@ func TestWorkflowValidationErrors(t *testing.T) {
 	rec = doJSON(t, h, http.MethodPut, "/api/v1/workflows/"+id+"/draft", `{"graph":`+validGraph+`}`, nil)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("missing If-Match: expected 400, got %d body %s", rec.Code, rec.Body)
+	}
+}
+
+func TestPublishWorkflow(t *testing.T) {
+	h, _ := workflowServer(t)
+	id, _ := createWorkflow(t, h)
+
+	rec := doJSON(t, h, http.MethodPost, "/api/v1/workflows/"+id+"/publish", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("publish: %d %s", rec.Code, rec.Body)
+	}
+	var published workflowstore.PublishedVersion
+	if err := json.Unmarshal(rec.Body.Bytes(), &published); err != nil {
+		t.Fatal(err)
+	}
+	if published.VersionNumber != 1 {
+		t.Fatalf("expected version 1, got %d", published.VersionNumber)
+	}
+
+	// Publishing again produces the next monotonic version.
+	rec = doJSON(t, h, http.MethodPost, "/api/v1/workflows/"+id+"/publish", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("republish: %d %s", rec.Code, rec.Body)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &published); err != nil {
+		t.Fatal(err)
+	}
+	if published.VersionNumber != 2 {
+		t.Fatalf("expected version 2, got %d", published.VersionNumber)
+	}
+
+	rec = doJSON(t, h, http.MethodPost, "/api/v1/workflows/missing/publish", "", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("publish missing: expected 404, got %d", rec.Code)
 	}
 }
 
