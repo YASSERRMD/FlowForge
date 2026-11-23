@@ -58,6 +58,29 @@ export interface WorkflowDetail extends WorkflowSummary {
   draft?: DraftState;
 }
 
+export interface VersionSummary {
+  versionId: string;
+  versionNumber: number;
+  status: "draft" | "published" | "superseded";
+  contentHash: string;
+  createdBy: string;
+  createdAt: string;
+  publishedAt?: string;
+  nodeCount: number;
+  edgeCount: number;
+}
+
+export interface VersionDetail extends VersionSummary {
+  graph: unknown;
+}
+
+export interface PublishedVersion {
+  versionId: string;
+  versionNumber: number;
+  contentHash: string;
+  publishedAt: string;
+}
+
 export interface ClientOptions {
   baseUrl: string;
   /** Development-only identity header (APP_ENV=development, AUTH_DEV_MODE=true). */
@@ -184,6 +207,28 @@ export class ApiClient {
    * Saves the draft graph. `ifMatch` is the draft rowVersion the caller last
    * read; the server answers 409 (ApiError.isConflict) when it is stale.
    */
+  async publish(id: string): Promise<PublishedVersion> {
+    const { data } = await this.request<PublishedVersion>(
+      `/api/v1/workflows/${id}/publish`,
+      { method: "POST" },
+    );
+    return data;
+  }
+
+  async listVersions(id: string): Promise<VersionSummary[]> {
+    const { data } = await this.request<{ versions: VersionSummary[] }>(
+      `/api/v1/workflows/${id}/versions`,
+    );
+    return data.versions;
+  }
+
+  async getVersion(id: string, versionNumber: number): Promise<VersionDetail> {
+    const { data } = await this.request<VersionDetail>(
+      `/api/v1/workflows/${id}/versions/${versionNumber}`,
+    );
+    return data;
+  }
+
   async saveDraft(
     id: string,
     graph: unknown,
