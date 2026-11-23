@@ -7,7 +7,6 @@ import {
   loadWorkflow,
   startAutosave,
   stopAutosave,
-  usePersistenceStore,
 } from "@/lib/editor/persistence";
 import { SaveStatus } from "./save-status";
 import { WorkflowEditor } from "./workflow-editor";
@@ -22,12 +21,11 @@ export function PersistentEditor({ workflowId }: { workflowId: string }) {
     () => createBrowserClient(process.env.NEXT_PUBLIC_DEV_USER ?? "local-dev"),
     [],
   );
-  const status = usePersistenceStore((s) => s.status);
-  const errorMessage = usePersistenceStore((s) => s.errorMessage);
 
   React.useEffect(() => {
     loadWorkflow(client, workflowId).catch(() => {
-      /* error state is rendered below */
+      // The editor stays usable with its local state; SaveStatus shows
+      // the load error and autosave keeps retrying on the next edit.
     });
     const stop = startAutosave(client);
     return () => {
@@ -35,14 +33,6 @@ export function PersistentEditor({ workflowId }: { workflowId: string }) {
       stopAutosave();
     };
   }, [client, workflowId]);
-
-  if (status === "error" && errorMessage && usePersistenceStore.getState().rowVersion === null) {
-    return (
-      <div role="alert" className="rounded-lg border border-error bg-error-muted p-4 text-sm text-error-muted-foreground">
-        Could not load this workflow: {errorMessage}
-      </div>
-    );
-  }
 
   return (
     <div className="flex flex-col gap-3">

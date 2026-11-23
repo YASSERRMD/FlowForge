@@ -79,7 +79,9 @@ export class ApiClient {
   constructor(options: ClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
     this.devUser = options.devUser;
-    this.fetchFn = options.fetchFn ?? fetch;
+    // Bind the default fetch: calling window.fetch unbound throws
+    // "Illegal invocation" in browsers.
+    this.fetchFn = options.fetchFn ?? ((input, init) => fetch(input, init));
   }
 
   private async request<T>(path: string, options: RequestOptions = {}): Promise<{ data: T; etag: string | null }> {
