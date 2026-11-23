@@ -74,6 +74,15 @@ export interface VersionDetail extends VersionSummary {
   graph: unknown;
 }
 
+export interface Template {
+  id: string;
+  name: string;
+  description: string;
+  tags: string[];
+  source: "built-in";
+  graph: unknown;
+}
+
 export interface PublishedVersion {
   versionId: string;
   versionNumber: number;
@@ -171,10 +180,16 @@ export class ApiClient {
     return data.workflows;
   }
 
+  async listTemplates(): Promise<Template[]> {
+    const { data } = await this.request<{ templates: Template[] }>("/api/v1/templates");
+    return data.templates;
+  }
+
   async createWorkflow(input: {
     name: string;
     description?: string;
     graph?: unknown;
+    templateId?: string;
   }): Promise<{ workflow: WorkflowDetail; etag: string | null }> {
     const { data, etag } = await this.request<WorkflowDetail>("/api/v1/workflows", {
       method: "POST",

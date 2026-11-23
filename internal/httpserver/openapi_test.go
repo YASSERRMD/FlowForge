@@ -46,6 +46,7 @@ func TestOpenAPICoversImplementedRoutes(t *testing.T) {
 		{http.MethodGet, "/readyz"},
 		{http.MethodGet, "/api/v1/ping"},
 		{http.MethodGet, "/api/v1/me"},
+		{http.MethodGet, "/api/v1/templates"},
 		{http.MethodPost, "/api/v1/workflows"},
 		{http.MethodGet, "/api/v1/workflows"},
 		{http.MethodGet, "/api/v1/workflows/{workflowID}"},

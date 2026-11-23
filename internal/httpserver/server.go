@@ -59,6 +59,7 @@ func New(cfg config.Config, log *slog.Logger, opts ...Option) *Server {
 		r.Group(func(r chi.Router) {
 			r.Use(s.RequireAuth)
 			r.Get("/me", s.handleMe)
+			r.Get("/templates", s.handleListTemplates)
 			r.Route("/workflows", func(r chi.Router) {
 				r.With(s.requireWorkflowStore).Post("/", s.handleCreateWorkflow)
 				r.With(s.requireWorkflowStore).Get("/", s.handleListWorkflows)

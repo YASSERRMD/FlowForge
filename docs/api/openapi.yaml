@@ -103,6 +103,24 @@ paths:
                 roles: [developer]
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /api/v1/templates:
+    get:
+      tags: [workflows]
+      summary: List built-in starter templates
+      description: Deterministic built-in template graphs with metadata and
+        source labeling; use `templateId` on workflow creation to instantiate.
+      operationId: listTemplates
+      parameters:
+        - $ref: "#/components/parameters/DevUser"
+      responses:
+        "200":
+          description: Template list including graph documents
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TemplateList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /api/v1/workflows:
     post:
       tags: [workflows]
@@ -589,6 +607,33 @@ components:
         publishedAt:
           type: string
           format: date-time
+    Template:
+      type: object
+      required: [id, name, description, tags, source, graph]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        source:
+          type: string
+          enum: [built-in]
+        graph:
+          type: object
+    TemplateList:
+      type: object
+      required: [templates]
+      properties:
+        templates:
+          type: array
+          items:
+            $ref: "#/components/schemas/Template"
     WorkflowList:
       type: object
       required: [workflows]
@@ -609,6 +654,10 @@ components:
           type: string
         graph:
           type: object
+          description: Mutually exclusive with templateId
+        templateId:
+          type: string
+          description: Instantiate from a built-in template graph
     UpdateWorkflowRequest:
       type: object
       required: [name]

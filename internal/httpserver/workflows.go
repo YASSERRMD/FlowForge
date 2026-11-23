@@ -15,6 +15,7 @@ import (
 
 	"github.com/YASSERRMD/FlowForge/internal/apierror"
 	"github.com/YASSERRMD/FlowForge/internal/graph"
+	"github.com/YASSERRMD/FlowForge/internal/templates"
 	"github.com/YASSERRMD/FlowForge/internal/workflowstore"
 )
 
@@ -108,6 +109,7 @@ type createWorkflowRequest struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	Graph       json.RawMessage `json:"graph"`
+	TemplateID  string          `json:"templateId"`
 }
 
 func (s *Server) handleCreateWorkflow(w http.ResponseWriter, r *http.Request) {
@@ -127,7 +129,21 @@ func (s *Server) handleCreateWorkflow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	graphJSON := json.RawMessage(defaultDraftGraph)
-	if len(req.Graph) > 0 {
+	switch {
+	case req.TemplateID != "" && len(req.Graph) > 0:
+		apierror.Write(w, r, s.log, fieldError("graph", "pass either graph or templateId, not both"))
+		return
+	case req.TemplateID != "":
+		tmpl, ok := templates.Get(req.TemplateID)
+		if !ok {
+			apierror.Write(w, r, s.log, apierror.New(apierror.CodeNotFound, "template not found"))
+			return
+		}
+		graphJSON = tmpl.Graph
+		if req.Description == "" {
+			req.Description = tmpl.Description
+		}
+	case len(req.Graph) > 0:
 		graphJSON = req.Graph
 		if !s.validateGraphPayload(w, r, graphJSON) {
 			return

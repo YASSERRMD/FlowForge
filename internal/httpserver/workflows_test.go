@@ -500,6 +500,47 @@ func TestCloneWorkflow(t *testing.T) {
 	}
 }
 
+func TestListTemplates(t *testing.T) {
+	h, _ := workflowServer(t)
+	rec := doJSON(t, h, http.MethodGet, "/api/v1/templates", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list templates: %d %s", rec.Code, rec.Body)
+	}
+	body := rec.Body.String()
+	for _, id := range []string{"invoice-approval", "parallel-service-request", "incident-escalation"} {
+		if !strings.Contains(body, id) {
+			t.Fatalf("expected template %q in %s", id, body)
+		}
+	}
+	if !strings.Contains(body, `"source":"built-in"`) {
+		t.Fatalf("expected source labeling in %s", body)
+	}
+}
+
+func TestCreateWorkflowFromTemplate(t *testing.T) {
+	h, _ := workflowServer(t)
+	rec := doJSON(t, h, http.MethodPost, "/api/v1/workflows",
+		`{"name":"From template","templateId":"invoice-approval"}`, nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create from template: %d %s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "invoice.fetch") {
+		t.Fatalf("expected template graph in draft, got %s", rec.Body)
+	}
+
+	rec = doJSON(t, h, http.MethodPost, "/api/v1/workflows",
+		`{"name":"Bad","templateId":"nope"}`, nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown template: expected 404, got %d", rec.Code)
+	}
+
+	rec = doJSON(t, h, http.MethodPost, "/api/v1/workflows",
+		`{"name":"Both","templateId":"invoice-approval","graph":{}}`, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("graph+template: expected 400, got %d", rec.Code)
+	}
+}
+
 func TestWorkflowRejectsOversizedBody(t *testing.T) {
 	h, _ := workflowServer(t)
 	// 256 KiB cap: a graph document padded beyond the limit must be rejected
