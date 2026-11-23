@@ -30,6 +30,59 @@ type PublishedVersion struct {
 	PublishedAt   string `json:"publishedAt"`
 }
 
+// VersionSummary is the history-list view of one version. Node/edge counts
+// and the content hash serve as cheap diff metadata.
+type VersionSummary struct {
+	VersionID     string `json:"versionId"`
+	VersionNumber int32  `json:"versionNumber"`
+	Status        string `json:"status"`
+	ContentHash   string `json:"contentHash"`
+	CreatedBy     string `json:"createdBy"`
+	CreatedAt     string `json:"createdAt"`
+	PublishedAt   string `json:"publishedAt,omitempty"`
+	NodeCount     int    `json:"nodeCount"`
+	EdgeCount     int    `json:"edgeCount"`
+}
+
+// VersionDetail adds the frozen graph document.
+type VersionDetail struct {
+	VersionSummary
+	Graph json.RawMessage `json:"graph"`
+}
+
+func tsOf(t pgtype.Timestamptz) string {
+	if !t.Valid {
+		return ""
+	}
+	return t.Time.UTC().Format("2006-01-02T15:04:05.999999999Z07:00")
+}
+
+func graphCounts(graphJSON []byte) (nodes, edges int) {
+	var doc struct {
+		Nodes []json.RawMessage `json:"nodes"`
+		Edges []json.RawMessage `json:"edges"`
+	}
+	if err := json.Unmarshal(graphJSON, &doc); err != nil {
+		return 0, 0
+	}
+	return len(doc.Nodes), len(doc.Edges)
+}
+
+func versionSummary(v dbgen.WorkflowVersion, author string) VersionSummary {
+	nodes, edges := graphCounts(v.GraphJson)
+	return VersionSummary{
+		VersionID:     uuidOf(v.ID),
+		VersionNumber: v.VersionNumber,
+		Status:        v.Status,
+		ContentHash:   fmt.Sprintf("%x", v.ContentHash),
+		CreatedBy:     author,
+		CreatedAt:     tsOf(v.CreatedAt),
+		PublishedAt:   tsOf(v.PublishedAt),
+		NodeCount:     nodes,
+		EdgeCount:     edges,
+	}
+}
+
 // WorkflowSummary is the list view of a workflow.
 type WorkflowSummary struct {
 	ID          string `json:"id"`
@@ -316,6 +369,65 @@ func (s *Store) Publish(ctx context.Context, ownerID, workflowID string) (*Publi
 		VersionNumber: published.VersionNumber,
 		ContentHash:   fmt.Sprintf("%x", published.ContentHash),
 		PublishedAt:   publishedAt,
+	}, nil
+}
+
+func listRowToVersion(r dbgen.ListVersionsWithAuthorRow) dbgen.WorkflowVersion {
+	return dbgen.WorkflowVersion{
+		ID: r.ID, WorkflowID: r.WorkflowID, VersionNumber: r.VersionNumber,
+		Status: r.Status, GraphJson: r.GraphJson, ContentHash: r.ContentHash,
+		CreatedBy: r.CreatedBy, CreatedAt: r.CreatedAt, PublishedAt: r.PublishedAt,
+		RowVersion: r.RowVersion,
+	}
+}
+
+func getRowToVersion(r dbgen.GetVersionWithAuthorRow) dbgen.WorkflowVersion {
+	return dbgen.WorkflowVersion{
+		ID: r.ID, WorkflowID: r.WorkflowID, VersionNumber: r.VersionNumber,
+		Status: r.Status, GraphJson: r.GraphJson, ContentHash: r.ContentHash,
+		CreatedBy: r.CreatedBy, CreatedAt: r.CreatedAt, PublishedAt: r.PublishedAt,
+		RowVersion: r.RowVersion,
+	}
+}
+
+// ListVersions returns every version of a workflow, newest first.
+func (s *Store) ListVersions(ctx context.Context, ownerID, workflowID string) ([]VersionSummary, error) {
+	detail, err := s.GetWorkflow(ctx, ownerID, workflowID)
+	if err != nil {
+		return nil, err
+	}
+	wfID, _ := parseUUID(detail.ID)
+	rows, err := dbgen.New(s.pool).ListVersionsWithAuthor(ctx, wfID)
+	if err != nil {
+		return nil, fmt.Errorf("list versions: %w", err)
+	}
+	out := make([]VersionSummary, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, versionSummary(listRowToVersion(row), row.CreatedByName))
+	}
+	return out, nil
+}
+
+// GetVersion returns one version with its frozen graph.
+func (s *Store) GetVersion(ctx context.Context, ownerID, workflowID string, versionNumber int32) (*VersionDetail, error) {
+	detail, err := s.GetWorkflow(ctx, ownerID, workflowID)
+	if err != nil {
+		return nil, err
+	}
+	wfID, _ := parseUUID(detail.ID)
+	row, err := dbgen.New(s.pool).GetVersionWithAuthor(ctx, dbgen.GetVersionWithAuthorParams{
+		WorkflowID:    wfID,
+		VersionNumber: versionNumber,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("get version: %w", err)
+	}
+	return &VersionDetail{
+		VersionSummary: versionSummary(getRowToVersion(row), row.CreatedByName),
+		Graph:          json.RawMessage(row.GraphJson),
 	}, nil
 }
 

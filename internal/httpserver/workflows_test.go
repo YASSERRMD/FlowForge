@@ -159,6 +159,53 @@ func (f *fakeStore) Publish(_ context.Context, ownerID, workflowID string) (*wor
 	}, nil
 }
 
+func (f *fakeStore) ListVersions(_ context.Context, ownerID, workflowID string) ([]workflowstore.VersionSummary, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	w, ok := f.workflows[workflowID]
+	if !ok || w.owner != ownerID {
+		return nil, workflowstore.ErrNotFound
+	}
+	var out []workflowstore.VersionSummary
+	for n := w.publishCount; n >= 1; n-- {
+		out = append(out, workflowstore.VersionSummary{
+			VersionID: "pub", VersionNumber: int32(n), Status: "published",
+			ContentHash: "ab", CreatedBy: "ada", CreatedAt: "2026-01-01T00:00:00Z",
+			NodeCount: 2, EdgeCount: 1,
+		})
+	}
+	if w.detail.Draft != nil {
+		out = append([]workflowstore.VersionSummary{{
+			VersionID: w.detail.Draft.VersionID, VersionNumber: w.detail.Draft.VersionNumber,
+			Status: "draft", ContentHash: w.detail.Draft.ContentHash, CreatedBy: "ada",
+			CreatedAt: "2026-01-01T00:00:00Z", NodeCount: 2, EdgeCount: 1,
+		}}, out...)
+	}
+	return out, nil
+}
+
+func (f *fakeStore) GetVersion(_ context.Context, ownerID, workflowID string, versionNumber int32) (*workflowstore.VersionDetail, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	w, ok := f.workflows[workflowID]
+	if !ok || w.owner != ownerID {
+		return nil, workflowstore.ErrNotFound
+	}
+	if w.detail.Draft == nil || w.detail.Draft.VersionNumber != versionNumber {
+		if versionNumber < 1 || versionNumber > int32(w.publishCount) {
+			return nil, workflowstore.ErrNotFound
+		}
+	}
+	return &workflowstore.VersionDetail{
+		VersionSummary: workflowstore.VersionSummary{
+			VersionID: "v", VersionNumber: versionNumber, Status: "published",
+			ContentHash: "ab", CreatedBy: "ada", CreatedAt: "2026-01-01T00:00:00Z",
+			NodeCount: 2, EdgeCount: 1,
+		},
+		Graph: w.detail.Draft.Graph,
+	}, nil
+}
+
 func workflowServer(t *testing.T) (http.Handler, *fakeStore) {
 	t.Helper()
 	cfg := testConfig()
@@ -318,6 +365,39 @@ func TestPublishWorkflow(t *testing.T) {
 	rec = doJSON(t, h, http.MethodPost, "/api/v1/workflows/missing/publish", "", nil)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("publish missing: expected 404, got %d", rec.Code)
+	}
+}
+
+func TestVersionHistory(t *testing.T) {
+	h, _ := workflowServer(t)
+	id, _ := createWorkflow(t, h)
+	doJSON(t, h, http.MethodPost, "/api/v1/workflows/"+id+"/publish", "", nil)
+
+	rec := doJSON(t, h, http.MethodGet, "/api/v1/workflows/"+id+"/versions", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list versions: %d %s", rec.Code, rec.Body)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"versionNumber":2`) || !strings.Contains(body, `"versionNumber":1`) {
+		t.Fatalf("expected draft v2 and published v1 in %s", body)
+	}
+	if !strings.Contains(body, `"createdBy":"ada"`) {
+		t.Fatalf("expected author in %s", body)
+	}
+
+	rec = doJSON(t, h, http.MethodGet, "/api/v1/workflows/"+id+"/versions/1", "", nil)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"graph"`) {
+		t.Fatalf("get version: %d %s", rec.Code, rec.Body)
+	}
+
+	rec = doJSON(t, h, http.MethodGet, "/api/v1/workflows/"+id+"/versions/99", "", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("missing version: expected 404, got %d", rec.Code)
+	}
+
+	rec = doJSON(t, h, http.MethodGet, "/api/v1/workflows/"+id+"/versions/abc", "", nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad version number: expected 400, got %d", rec.Code)
 	}
 }
 

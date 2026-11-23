@@ -28,6 +28,8 @@ type WorkflowStore interface {
 	ArchiveWorkflow(ctx context.Context, ownerID, id string) error
 	SaveDraft(ctx context.Context, ownerID, workflowID string, graphJSON json.RawMessage, contentHash []byte, expectedRowVersion int32) (*workflowstore.DraftState, error)
 	Publish(ctx context.Context, ownerID, workflowID string) (*workflowstore.PublishedVersion, error)
+	ListVersions(ctx context.Context, ownerID, workflowID string) ([]workflowstore.VersionSummary, error)
+	GetVersion(ctx context.Context, ownerID, workflowID string, versionNumber int32) (*workflowstore.VersionDetail, error)
 }
 
 // maxWorkflowBody bounds workflow payloads (a 200-node graph with configs
@@ -295,6 +297,37 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	apierror.JSON(w, http.StatusOK, published)
+}
+
+func (s *Server) handleListVersions(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := s.ownerOrError(w, r)
+	if !ok {
+		return
+	}
+	versions, err := s.workflows.ListVersions(r.Context(), ownerID, chi.URLParam(r, "workflowID"))
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	apierror.JSON(w, http.StatusOK, map[string]any{"versions": versions})
+}
+
+func (s *Server) handleGetVersion(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := s.ownerOrError(w, r)
+	if !ok {
+		return
+	}
+	n, err := strconv.ParseInt(chi.URLParam(r, "versionNumber"), 10, 32)
+	if err != nil || n < 1 {
+		apierror.Write(w, r, s.log, fieldError("versionNumber", "versionNumber must be a positive integer"))
+		return
+	}
+	detail, err := s.workflows.GetVersion(r.Context(), ownerID, chi.URLParam(r, "workflowID"), int32(n))
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	apierror.JSON(w, http.StatusOK, detail)
 }
 
 // validateGraphPayload parses and structurally validates a graph document,
