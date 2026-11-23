@@ -203,6 +203,15 @@ export class ApiClient {
     await this.request<void>(`/api/v1/workflows/${id}`, { method: "DELETE" });
   }
 
+  /** Duplicates a workflow with fresh entity IDs; the caller owns the clone. */
+  async cloneWorkflow(id: string, name?: string): Promise<WorkflowDetail> {
+    const { data } = await this.request<WorkflowDetail>(`/api/v1/workflows/${id}/clone`, {
+      method: "POST",
+      body: name ? { name } : {},
+    });
+    return data;
+  }
+
   /**
    * Saves the draft graph. `ifMatch` is the draft rowVersion the caller last
    * read; the server answers 409 (ApiError.isConflict) when it is stale.

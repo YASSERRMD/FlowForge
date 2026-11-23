@@ -67,6 +67,7 @@ func New(cfg config.Config, log *slog.Logger, opts ...Option) *Server {
 				r.With(s.requireWorkflowStore).Delete("/{workflowID}", s.handleDeleteWorkflow)
 				r.With(s.requireWorkflowStore).Put("/{workflowID}/draft", s.handleSaveDraft)
 				r.With(s.requireWorkflowStore).Post("/{workflowID}/publish", s.handlePublish)
+				r.With(s.requireWorkflowStore).Post("/{workflowID}/clone", s.handleClone)
 				r.With(s.requireWorkflowStore).Get("/{workflowID}/versions", s.handleListVersions)
 				r.With(s.requireWorkflowStore).Get("/{workflowID}/versions/{versionNumber}", s.handleGetVersion)
 				r.With(s.requireWorkflowStore).Post("/{workflowID}/versions/{versionNumber}/copy-to-draft", s.handleCopyVersionToDraft)

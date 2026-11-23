@@ -395,6 +395,38 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+  /api/v1/workflows/{workflowID}/clone:
+    post:
+      tags: [workflows]
+      summary: Clone a workflow
+      description: Duplicates the workflow with fresh entity IDs; the caller
+        becomes the owner. The clone's draft starts from the source's
+        published graph, falling back to its draft.
+      operationId: cloneWorkflow
+      parameters:
+        - $ref: "#/components/parameters/DevUser"
+        - $ref: "#/components/parameters/WorkflowID"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  maxLength: 120
+                  description: Defaults to "Copy of <source name>"
+      responses:
+        "201":
+          description: Clone created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowDetail"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
 components:
   parameters:
     DevUser:

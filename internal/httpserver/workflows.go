@@ -31,6 +31,7 @@ type WorkflowStore interface {
 	ListVersions(ctx context.Context, ownerID, workflowID string) ([]workflowstore.VersionSummary, error)
 	GetVersion(ctx context.Context, ownerID, workflowID string, versionNumber int32) (*workflowstore.VersionDetail, error)
 	CopyVersionToDraft(ctx context.Context, ownerID, workflowID string, versionNumber int32, expectedRowVersion int32) (*workflowstore.DraftState, error)
+	CloneWorkflow(ctx context.Context, ownerID, sourceID, name string) (*workflowstore.WorkflowDetail, error)
 }
 
 // maxWorkflowBody bounds workflow payloads (a 200-node graph with configs
@@ -356,6 +357,47 @@ func (s *Server) handleCopyVersionToDraft(w http.ResponseWriter, r *http.Request
 	}
 	w.Header().Set("ETag", draftETag(draft))
 	apierror.JSON(w, http.StatusOK, draft)
+}
+
+type cloneWorkflowRequest struct {
+	Name string `json:"name"`
+}
+
+// handleClone duplicates a workflow with fresh entity IDs; the caller
+// becomes the owner of the clone.
+func (s *Server) handleClone(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := s.ownerOrError(w, r)
+	if !ok {
+		return
+	}
+	var req cloneWorkflowRequest
+	if err := DecodeJSON(r, &req, maxWorkflowBody); err != nil {
+		apierror.Write(w, r, s.log, err)
+		return
+	}
+	sourceID := chi.URLParam(r, "workflowID")
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		// Default naming mirrors common "Copy of X" conventions.
+		source, err := s.workflows.GetWorkflow(r.Context(), ownerID, sourceID)
+		if err != nil {
+			s.writeStoreError(w, r, err)
+			return
+		}
+		name = "Copy of " + source.Name
+	}
+	if len(name) > 120 {
+		apierror.Write(w, r, s.log, fieldError("name", "name must be at most 120 characters"))
+		return
+	}
+
+	detail, err := s.workflows.CloneWorkflow(r.Context(), ownerID, sourceID, name)
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	w.Header().Set("ETag", draftETag(detail.Draft))
+	apierror.JSON(w, http.StatusCreated, detail)
 }
 
 // validateGraphPayload parses and structurally validates a graph document,

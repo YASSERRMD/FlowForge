@@ -224,6 +224,29 @@ func (f *fakeStore) CopyVersionToDraft(_ context.Context, ownerID, workflowID st
 	return &draft, nil
 }
 
+func (f *fakeStore) CloneWorkflow(_ context.Context, ownerID, sourceID, name string) (*workflowstore.WorkflowDetail, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	source, ok := f.workflows[sourceID]
+	if !ok || source.owner != ownerID {
+		return nil, workflowstore.ErrNotFound
+	}
+	id := fmt.Sprintf("wf-%d", f.nextID)
+	f.nextID++
+	detail := workflowstore.WorkflowDetail{
+		WorkflowSummary: workflowstore.WorkflowSummary{
+			ID: id, Name: name, Description: "Clone of " + source.detail.Name,
+			Status: "draft", RowVersion: 1, UpdatedAt: "2026-01-01T00:00:00Z",
+		},
+		Draft: &workflowstore.DraftState{
+			VersionID: "ver-" + id, VersionNumber: 1, RowVersion: 1,
+			ContentHash: source.detail.Draft.ContentHash, Graph: source.detail.Draft.Graph,
+		},
+	}
+	f.workflows[id] = &storedWorkflow{detail: detail, owner: ownerID}
+	return f.workflows[id].clone(), nil
+}
+
 func workflowServer(t *testing.T) (http.Handler, *fakeStore) {
 	t.Helper()
 	cfg := testConfig()
@@ -441,6 +464,39 @@ func TestCopyVersionToDraft(t *testing.T) {
 	rec = doJSON(t, h, http.MethodPost, "/api/v1/workflows/"+id+"/versions/99/copy-to-draft", "", map[string]string{"If-Match": `"2"`})
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("missing version: expected 404, got %d", rec.Code)
+	}
+}
+
+func TestCloneWorkflow(t *testing.T) {
+	h, _ := workflowServer(t)
+	id, _ := createWorkflow(t, h)
+
+	rec := doJSON(t, h, http.MethodPost, "/api/v1/workflows/"+id+"/clone", `{}`, nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("clone: %d %s", rec.Code, rec.Body)
+	}
+	var clone workflowstore.WorkflowDetail
+	if err := json.Unmarshal(rec.Body.Bytes(), &clone); err != nil {
+		t.Fatal(err)
+	}
+	if clone.ID == id {
+		t.Fatal("clone must have a fresh workflow ID")
+	}
+	if clone.Name != "Copy of My flow" {
+		t.Fatalf("unexpected default name %q", clone.Name)
+	}
+	if clone.Draft == nil || clone.Draft.VersionID == "" {
+		t.Fatal("clone must carry a fresh draft version")
+	}
+
+	rec = doJSON(t, h, http.MethodPost, "/api/v1/workflows/"+id+"/clone", `{"name":"Named clone"}`, nil)
+	if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), "Named clone") {
+		t.Fatalf("named clone: %d %s", rec.Code, rec.Body)
+	}
+
+	rec = doJSON(t, h, http.MethodPost, "/api/v1/workflows/missing/clone", `{}`, nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("clone missing: expected 404, got %d", rec.Code)
 	}
 }
 

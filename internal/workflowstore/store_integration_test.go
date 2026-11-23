@@ -193,6 +193,47 @@ func TestStoreCopyVersionToDraft(t *testing.T) {
 	}
 }
 
+func TestStoreCloneWorkflow(t *testing.T) {
+	store := freshStore(t)
+	ctx := context.Background()
+
+	owner, _ := store.EnsureUser(ctx, "dev-ada@dev.flowforge.local", "ada")
+	hash := sha256.Sum256([]byte(testGraph))
+	source, err := store.CreateWorkflow(ctx, owner, "Original", "", json.RawMessage(testGraph), hash[:])
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := store.Publish(ctx, owner, source.ID); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	clone, err := store.CloneWorkflow(ctx, owner, source.ID, "Copy of Original")
+	if err != nil {
+		t.Fatalf("clone: %v", err)
+	}
+	if clone.ID == source.ID || clone.Draft.VersionID == source.Draft.VersionID {
+		t.Fatal("clone must have regenerated entity IDs")
+	}
+	// The clone starts as a fresh draft at version 1 with the source graph.
+	if clone.Status != "draft" || clone.Draft.VersionNumber != 1 {
+		t.Fatalf("unexpected clone state: %+v", clone)
+	}
+	var want, got map[string]any
+	if err := json.Unmarshal([]byte(testGraph), &want); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(clone.Draft.Graph, &got); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprintf("%v", want) != fmt.Sprintf("%v", got) {
+		t.Fatalf("clone graph mismatch: %s", clone.Draft.Graph)
+	}
+
+	if _, err := store.CloneWorkflow(ctx, owner, "00000000-0000-0000-0000-000000000000", "x"); err == nil {
+		t.Fatal("expected not found cloning a missing workflow")
+	}
+}
+
 func TestStoreOwnerIsolation(t *testing.T) {
 	store := freshStore(t)
 	ctx := context.Background()

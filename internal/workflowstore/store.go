@@ -4,6 +4,7 @@ package workflowstore
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -466,6 +467,42 @@ func (s *Store) CopyVersionToDraft(ctx context.Context, ownerID, workflowID stri
 		return nil, fmt.Errorf("copy version to draft: %w", err)
 	}
 	return draftOf(version), nil
+}
+
+// CloneWorkflow duplicates a workflow for the calling owner: a brand-new
+// workflow row and version rows (fresh entity IDs) whose draft starts from
+// the source's published graph, falling back to its draft.
+func (s *Store) CloneWorkflow(ctx context.Context, ownerID, sourceID, name string) (*WorkflowDetail, error) {
+	source, err := s.GetWorkflow(ctx, ownerID, sourceID)
+	if err != nil {
+		return nil, err
+	}
+
+	var graph json.RawMessage
+	var hash []byte
+	if published, err := s.publishedVersion(ctx, source.ID); err == nil {
+		graph = json.RawMessage(published.GraphJson)
+		hash = published.ContentHash
+	} else if source.Draft != nil {
+		graph = source.Draft.Graph
+		raw, decErr := hex.DecodeString(source.Draft.ContentHash)
+		if decErr != nil {
+			return nil, fmt.Errorf("decode content hash: %w", decErr)
+		}
+		hash = raw
+	} else {
+		return nil, ErrNoDraft
+	}
+
+	return s.CreateWorkflow(ctx, ownerID, name, "Clone of "+source.Name, graph, hash)
+}
+
+func (s *Store) publishedVersion(ctx context.Context, workflowID string) (dbgen.WorkflowVersion, error) {
+	wfID, err := parseUUID(workflowID)
+	if err != nil {
+		return dbgen.WorkflowVersion{}, err
+	}
+	return dbgen.New(s.pool).GetPublishedVersion(ctx, wfID)
 }
 
 // SaveDraft replaces the draft graph, guarded by the row_version the caller
