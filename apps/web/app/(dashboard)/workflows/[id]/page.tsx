@@ -1,5 +1,5 @@
 import { PageHeader } from "@/components/layout/page-header";
-import { WorkflowEditor } from "@/components/editor/workflow-editor";
+import { PersistentEditor } from "@/components/editor/persistent-editor";
 
 export default async function WorkflowEditorPage({
   params,
@@ -11,9 +11,9 @@ export default async function WorkflowEditorPage({
     <>
       <PageHeader
         title="Workflow editor"
-        description={`Editing draft ${id} (local canvas state only — persistence ships in a later phase).`}
+        description="Edits autosave to the draft with optimistic concurrency; conflicts are shown, never silently overwritten."
       />
-      <WorkflowEditor />
+      <PersistentEditor workflowId={id} />
     </>
   );
 }
