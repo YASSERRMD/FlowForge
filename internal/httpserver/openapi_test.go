@@ -46,6 +46,12 @@ func TestOpenAPICoversImplementedRoutes(t *testing.T) {
 		{http.MethodGet, "/readyz"},
 		{http.MethodGet, "/api/v1/ping"},
 		{http.MethodGet, "/api/v1/me"},
+		{http.MethodPost, "/api/v1/workflows"},
+		{http.MethodGet, "/api/v1/workflows"},
+		{http.MethodGet, "/api/v1/workflows/{workflowID}"},
+		{http.MethodPatch, "/api/v1/workflows/{workflowID}"},
+		{http.MethodDelete, "/api/v1/workflows/{workflowID}"},
+		{http.MethodPut, "/api/v1/workflows/{workflowID}/draft"},
 	}
 	for _, route := range implemented {
 		item := doc.Paths.Find(route.path)

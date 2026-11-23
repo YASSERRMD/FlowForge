@@ -33,3 +33,11 @@ UPDATE sessions SET revoked_at = now() WHERE id = $1;
 
 -- name: DeleteExpiredSessions :exec
 DELETE FROM sessions WHERE expires_at < now() - interval '7 days';
+
+-- name: EnsureUser :one
+-- Idempotent dev-identity bootstrap: insert or touch the row and return it.
+-- The ON CONFLICT no-op update forces RETURNING to emit the existing row.
+INSERT INTO users (email, display_name, password_hash, role)
+VALUES ($1, $2, '!dev-account', 'developer')
+ON CONFLICT (email) DO UPDATE SET display_name = users.display_name
+RETURNING *;

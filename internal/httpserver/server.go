@@ -18,21 +18,34 @@ import (
 
 // Server is the FlowForge API HTTP server.
 type Server struct {
-	cfg     config.Config
-	log     *slog.Logger
-	router  chi.Router
-	http    *http.Server
-	checker *Checker
-	auth    Authenticator
+	cfg       config.Config
+	log       *slog.Logger
+	router    chi.Router
+	http      *http.Server
+	checker   *Checker
+	auth      Authenticator
+	workflows WorkflowStore
+}
+
+// Option customizes a Server at construction.
+type Option func(*Server)
+
+// WithWorkflowStore wires workflow persistence; without it the workflow
+// routes answer 503.
+func WithWorkflowStore(store WorkflowStore) Option {
+	return func(s *Server) { s.workflows = store }
 }
 
 // New builds the server with its route table and middleware stack.
-func New(cfg config.Config, log *slog.Logger) *Server {
+func New(cfg config.Config, log *slog.Logger, opts ...Option) *Server {
 	s := &Server{
 		cfg:     cfg,
 		log:     log,
 		checker: NewChecker(2 * time.Second),
 		auth:    NewAuthenticator(cfg),
+	}
+	for _, opt := range opts {
+		opt(s)
 	}
 
 	r := chi.NewRouter()
@@ -46,6 +59,14 @@ func New(cfg config.Config, log *slog.Logger) *Server {
 		r.Group(func(r chi.Router) {
 			r.Use(s.RequireAuth)
 			r.Get("/me", s.handleMe)
+			r.Route("/workflows", func(r chi.Router) {
+				r.With(s.requireWorkflowStore).Post("/", s.handleCreateWorkflow)
+				r.With(s.requireWorkflowStore).Get("/", s.handleListWorkflows)
+				r.With(s.requireWorkflowStore).Get("/{workflowID}", s.handleGetWorkflow)
+				r.With(s.requireWorkflowStore).Patch("/{workflowID}", s.handleUpdateWorkflow)
+				r.With(s.requireWorkflowStore).Delete("/{workflowID}", s.handleDeleteWorkflow)
+				r.With(s.requireWorkflowStore).Put("/{workflowID}/draft", s.handleSaveDraft)
+			})
 		})
 	})
 	s.router = r

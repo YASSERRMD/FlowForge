@@ -60,3 +60,14 @@ RETURNING *;
 UPDATE workflow_versions
 SET status = 'superseded'
 WHERE workflow_id = $1 AND status = 'published' AND id <> $2;
+
+-- name: GetWorkflowForOwner :one
+SELECT * FROM workflows
+WHERE id = $1 AND owner_id = $2 AND archived_at IS NULL;
+
+-- name: UpdateDraftGraph :one
+-- Optimistic save: only applies when the caller's row_version matches.
+UPDATE workflow_versions
+SET graph_json = $3, content_hash = $4
+WHERE id = $1 AND row_version = $2 AND status = 'draft'
+RETURNING *;

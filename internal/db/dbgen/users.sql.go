@@ -114,6 +114,36 @@ func (q *Queries) DisableUser(ctx context.Context, id pgtype.UUID) (User, error)
 	return i, err
 }
 
+const ensureUser = `-- name: EnsureUser :one
+INSERT INTO users (email, display_name, password_hash, role)
+VALUES ($1, $2, '!dev-account', 'developer')
+ON CONFLICT (email) DO UPDATE SET display_name = users.display_name
+RETURNING id, email, display_name, password_hash, role, disabled_at, created_at, updated_at
+`
+
+type EnsureUserParams struct {
+	Email       string `json:"email"`
+	DisplayName string `json:"display_name"`
+}
+
+// Idempotent dev-identity bootstrap: insert or touch the row and return it.
+// The ON CONFLICT no-op update forces RETURNING to emit the existing row.
+func (q *Queries) EnsureUser(ctx context.Context, arg EnsureUserParams) (User, error) {
+	row := q.db.QueryRow(ctx, ensureUser, arg.Email, arg.DisplayName)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.DisplayName,
+		&i.PasswordHash,
+		&i.Role,
+		&i.DisabledAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getActiveSessionByTokenHash = `-- name: GetActiveSessionByTokenHash :one
 SELECT s.id, s.user_id, s.token_hash, s.user_agent, s.ip, s.created_at, s.expires_at, s.revoked_at FROM sessions s
 JOIN users u ON u.id = s.user_id

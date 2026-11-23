@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flowforge.dev/schemas/graph.json",
+  "title": "FlowForge Workflow Graph",
+  "description": "Canonical persisted form of a FlowForge workflow DAG. schemaVersion '1' is the only supported version; any other value is rejected (see docs/contracts/graph.md).",
+  "type": "object",
+  "required": ["schemaVersion", "nodes", "edges"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "1" },
+    "nodes": {
+      "type": "array",
+      "maxItems": 200,
+      "items": { "$ref": "#/$defs/node" }
+    },
+    "edges": {
+      "type": "array",
+      "maxItems": 400,
+      "items": { "$ref": "#/$defs/edge" }
+    }
+  },
+  "$defs": {
+    "node": {
+      "type": "object",
+      "required": ["id", "kind", "label"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "kind": {
+          "enum": ["start", "end", "action", "delay", "condition", "fork", "join"]
+        },
+        "label": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "position": {
+          "type": "object",
+          "required": ["x", "y"],
+          "additionalProperties": false,
+          "properties": {
+            "x": { "type": "number" },
+            "y": { "type": "number" }
+          }
+        },
+        "config": { "$ref": "#/$defs/nodeConfig" }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "required": ["id", "source", "target"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "source": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "sourceHandle": {
+          "type": ["string", "null"],
+          "maxLength": 64
+        },
+        "target": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "targetHandle": {
+          "type": ["string", "null"],
+          "maxLength": 64
+        },
+        "label": { "type": "string", "maxLength": 120 }
+      }
+    },
+    "nodeConfig": {
+      "description": "Per-kind configuration. The shape depends on the node kind; unknown keys are preserved on round-trip so older clients do not destroy data written by newer ones.",
+      "type": "object"
+    }
+  }
+}

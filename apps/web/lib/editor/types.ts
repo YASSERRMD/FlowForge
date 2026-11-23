@@ -1,3 +1,5 @@
+import type { GraphNodeConfig } from "@/lib/contracts/graph";
+
 export type NodeKind =
   | "start"
   | "end"
@@ -10,6 +12,7 @@ export type NodeKind =
 export interface FlowNodeData extends Record<string, unknown> {
   label: string;
   kind: NodeKind;
+  config?: GraphNodeConfig;
 }
 
 export const NODE_KIND_LABELS: Record<NodeKind, string> = {

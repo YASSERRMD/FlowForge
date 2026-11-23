@@ -15,6 +15,8 @@ tags:
     description: Process health and diagnostics
   - name: identity
     description: Session and principal information
+  - name: workflows
+    description: Workflow documents and their draft graphs
 paths:
   /healthz:
     get:
@@ -101,7 +103,198 @@ paths:
                 roles: [developer]
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /api/v1/workflows:
+    post:
+      tags: [workflows]
+      summary: Create a workflow
+      description: Creates a workflow with a first draft version. When `graph`
+        is omitted, a minimal valid start→end graph is assigned. A supplied
+        graph is validated server-side; structural errors yield 422 with the
+        full issue list.
+      operationId: createWorkflow
+      parameters:
+        - $ref: "#/components/parameters/DevUser"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWorkflowRequest"
+      responses:
+        "201":
+          description: Workflow created
+          headers:
+            ETag:
+              description: Draft row version token for optimistic saves
+              schema:
+                type: string
+                example: '"1"'
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowDetail"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/GraphInvalid"
+    get:
+      tags: [workflows]
+      summary: List workflows
+      operationId: listWorkflows
+      parameters:
+        - $ref: "#/components/parameters/DevUser"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        "200":
+          description: Owner's workflows, newest first
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /api/v1/workflows/{workflowID}:
+    get:
+      tags: [workflows]
+      summary: Get a workflow with its draft
+      operationId: getWorkflow
+      parameters:
+        - $ref: "#/components/parameters/DevUser"
+        - $ref: "#/components/parameters/WorkflowID"
+      responses:
+        "200":
+          description: Workflow detail including the draft version
+          headers:
+            ETag:
+              description: Draft row version token for optimistic saves
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowDetail"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [workflows]
+      summary: Rename or re-describe a workflow
+      operationId: updateWorkflow
+      parameters:
+        - $ref: "#/components/parameters/DevUser"
+        - $ref: "#/components/parameters/WorkflowID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateWorkflowRequest"
+      responses:
+        "200":
+          description: Updated workflow metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkflowSummary"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [workflows]
+      summary: Archive a workflow (soft delete)
+      operationId: deleteWorkflow
+      parameters:
+        - $ref: "#/components/parameters/DevUser"
+        - $ref: "#/components/parameters/WorkflowID"
+      responses:
+        "204":
+          description: Archived
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/workflows/{workflowID}/draft:
+    put:
+      tags: [workflows]
+      summary: Save the draft graph (optimistic concurrency)
+      description: Replaces the draft graph after full server-side validation.
+        The If-Match header must carry the draft rowVersion the client last
+        read (returned as the ETag on reads and saves); a stale token yields
+        409 so two editors never silently overwrite each other.
+      operationId: saveDraft
+      parameters:
+        - $ref: "#/components/parameters/DevUser"
+        - $ref: "#/components/parameters/WorkflowID"
+        - name: If-Match
+          in: header
+          required: true
+          description: Draft row version token, e.g. "3"
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SaveDraftRequest"
+      responses:
+        "200":
+          description: Saved draft state with the advanced row version
+          headers:
+            ETag:
+              description: New draft row version token
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DraftState"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/GraphInvalid"
 components:
+  parameters:
+    DevUser:
+      name: X-Dev-User
+      in: header
+      required: false
+      description: Development-only identity (APP_ENV=development, AUTH_DEV_MODE=true)
+      schema:
+        type: string
+    WorkflowID:
+      name: workflowID
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
   schemas:
     StatusOK:
       type: object
@@ -133,6 +326,100 @@ components:
           type: array
           items:
             type: string
+    WorkflowSummary:
+      type: object
+      required: [id, name, description, status, rowVersion, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [draft, active, archived]
+        rowVersion:
+          type: integer
+        updatedAt:
+          type: string
+          format: date-time
+    GraphIssue:
+      type: object
+      required: [severity, code, message]
+      properties:
+        severity:
+          type: string
+          enum: [error, warning]
+        code:
+          type: string
+        message:
+          type: string
+        nodeId:
+          type: string
+        edgeId:
+          type: string
+    DraftState:
+      type: object
+      required: [versionId, versionNumber, rowVersion, contentHash, graph]
+      properties:
+        versionId:
+          type: string
+          format: uuid
+        versionNumber:
+          type: integer
+        rowVersion:
+          type: integer
+        contentHash:
+          type: string
+          description: hex-encoded SHA-256 of the graph JSON
+        graph:
+          type: object
+          description: Graph document per packages/contracts/graph-schema.json
+    WorkflowDetail:
+      allOf:
+        - $ref: "#/components/schemas/WorkflowSummary"
+        - type: object
+          properties:
+            draft:
+              $ref: "#/components/schemas/DraftState"
+    WorkflowList:
+      type: object
+      required: [workflows]
+      properties:
+        workflows:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkflowSummary"
+    CreateWorkflowRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        description:
+          type: string
+        graph:
+          type: object
+    UpdateWorkflowRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        description:
+          type: string
+    SaveDraftRequest:
+      type: object
+      required: [graph]
+      properties:
+        graph:
+          type: object
     FieldError:
       type: object
       required: [field, message]
@@ -193,3 +480,44 @@ components:
               fields:
                 - field: name
                   message: is required
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: not_found
+              message: workflow not found
+    Conflict:
+      description: Stale optimistic-concurrency token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              code: conflict
+              message: the workflow changed since you loaded it; reload and try again
+    GraphInvalid:
+      description: Graph failed server-side structural validation
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error:
+                type: object
+                required: [code, message, issues]
+                properties:
+                  code:
+                    type: string
+                    enum: [validation_failed]
+                  message:
+                    type: string
+                  issues:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/GraphIssue"

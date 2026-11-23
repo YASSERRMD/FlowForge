@@ -123,4 +123,5 @@ type WorkflowVersion struct {
 	CreatedBy     pgtype.UUID        `json:"created_by"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	PublishedAt   pgtype.Timestamptz `json:"published_at"`
+	RowVersion    int32              `json:"row_version"`
 }
