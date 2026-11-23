@@ -23,6 +23,7 @@ type Template struct {
 var registry = []Template{
 	invoiceApproval,
 	parallelServiceRequest,
+	incidentEscalation,
 }
 
 // List returns every built-in template in stable registry order.
