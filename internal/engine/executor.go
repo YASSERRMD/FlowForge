@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/YASSERRMD/FlowForge/internal/db/dbgen"
+	"github.com/YASSERRMD/FlowForge/internal/engine/actions"
 	"github.com/YASSERRMD/FlowForge/internal/graph"
 )
 
@@ -39,12 +40,20 @@ func (e *stepError) Error() string { return e.message }
 // the run, records the attempt, executes the node kind, persists the
 // outcome with its events and enqueues successor dispatches.
 type Executor struct {
-	pool *pgxpool.Pool
+	pool    *pgxpool.Pool
+	actions *actions.Registry
 }
 
-// NewExecutor builds an Executor over pool.
+// NewExecutor builds an Executor with the default deterministic action
+// registry.
 func NewExecutor(pool *pgxpool.Pool) *Executor {
-	return &Executor{pool: pool}
+	return NewExecutorWithActions(pool, actions.Default())
+}
+
+// NewExecutorWithActions builds an Executor with an explicit registry
+// (tests inject fakes).
+func NewExecutorWithActions(pool *pgxpool.Pool, registry *actions.Registry) *Executor {
+	return &Executor{pool: pool, actions: registry}
 }
 
 // ExecuteNode processes one execute_node task payload. Deterministic step
@@ -170,7 +179,7 @@ func (e *Executor) startAttempt(ctx context.Context, q *dbgen.Queries,
 
 // executeNode runs the node's kind-specific behavior and returns its
 // output document.
-func (e *Executor) executeNode(_ context.Context, _ *dbgen.Queries,
+func (e *Executor) executeNode(ctx context.Context, _ *dbgen.Queries,
 	run dbgen.WorkflowRun, node graph.Node, _ *graph.Graph) (json.RawMessage, error) {
 
 	switch node.Kind {
@@ -182,12 +191,39 @@ func (e *Executor) executeNode(_ context.Context, _ *dbgen.Queries,
 			return nil, &stepError{code: "invalid_run_input", message: "run input is not a JSON object"}
 		}
 		return json.RawMessage(run.Variables), nil
+	case graph.KindAction:
+		return e.executeAction(ctx, node)
 	default:
 		return nil, &stepError{
 			code:    "unsupported_node_kind",
 			message: fmt.Sprintf("%s: %s", ErrUnsupportedKind, node.Kind),
 		}
 	}
+}
+
+// actionConfig is the persisted config of an action node.
+type actionConfig struct {
+	ActionType string          `json:"actionType"`
+	Params     json.RawMessage `json:"params"`
+}
+
+// executeAction runs the node's mock action through the registry. Unknown
+// types and action failures are deterministic step failures.
+func (e *Executor) executeAction(ctx context.Context, node graph.Node) (json.RawMessage, error) {
+	var cfg actionConfig
+	if len(node.Config) > 0 {
+		if err := json.Unmarshal(node.Config, &cfg); err != nil {
+			return nil, &stepError{code: "invalid_action_config", message: err.Error()}
+		}
+	}
+	out, err := e.actions.Execute(ctx, cfg.ActionType, cfg.Params)
+	if err != nil {
+		if errors.Is(err, actions.ErrUnknownType) {
+			return nil, &stepError{code: "unknown_action", message: err.Error()}
+		}
+		return nil, &stepError{code: "action_failed", message: err.Error()}
+	}
+	return out, nil
 }
 
 // succeedStep finishes the attempt, emits step.succeeded and dispatches

@@ -173,3 +173,85 @@ func TestExecuteMissingNodeFailsRun(t *testing.T) {
 		t.Fatalf("run status = %q, want failed", status)
 	}
 }
+
+func TestActionNodeExecutesDeterministically(t *testing.T) {
+	f := newFixture(t)
+	detail := f.createPublished("Action flow", sequentialGraph)
+	created, err := f.svc.CreateRun(f.ctx, f.ownerID, detail.ID, jsonRaw(`{"x":1}`), "")
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	runID := uuidString(t, created.Run.ID.Bytes[:])
+
+	ex := engine.NewExecutor(f.pool)
+	if err := ex.ExecuteNode(f.ctx, runID, "start-1"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if err := ex.ExecuteNode(f.ctx, runID, "action-1"); err != nil {
+		t.Fatalf("action: %v", err)
+	}
+
+	var status, output string
+	if err := f.sqlDB.QueryRow(
+		`SELECT status, output_json::text FROM step_attempts
+		 WHERE run_id = $1 AND node_id = 'action-1'`, runID).Scan(&status, &output); err != nil {
+		t.Fatal(err)
+	}
+	if status != "succeeded" {
+		t.Fatalf("action step status = %q", status)
+	}
+	if !jsonHas(t, output, "ok", "") && !jsonContains(output, `"echo"`) {
+		t.Fatalf("unexpected action output: %s", output)
+	}
+	if !jsonContains(output, `"value": "hello"`) && !jsonContains(output, `"value":"hello"`) {
+		t.Fatalf("echo lost params: %s", output)
+	}
+}
+
+func TestUnknownActionFailsStepAndRun(t *testing.T) {
+	f := newFixture(t)
+	graph := `{"schemaVersion":"1","nodes":[` +
+		`{"id":"start-1","kind":"start","label":"Start"},` +
+		`{"id":"action-1","kind":"action","label":"Mystery",` +
+		`"config":{"actionType":"mock.nonexistent","params":{}}},` +
+		`{"id":"end-1","kind":"end","label":"End"}],` +
+		`"edges":[{"id":"e1","source":"start-1","target":"action-1"},` +
+		`{"id":"e2","source":"action-1","target":"end-1"}]}`
+	detail := f.createPublished("Bad action", graph)
+	created, err := f.svc.CreateRun(f.ctx, f.ownerID, detail.ID, nil, "")
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	runID := uuidString(t, created.Run.ID.Bytes[:])
+
+	ex := engine.NewExecutor(f.pool)
+	if err := ex.ExecuteNode(f.ctx, runID, "start-1"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	// The task itself succeeds; the step and run fail durably.
+	if err := ex.ExecuteNode(f.ctx, runID, "action-1"); err != nil {
+		t.Fatalf("task should complete, got %v", err)
+	}
+
+	var stepStatus, errCode, runStatus string
+	if err := f.sqlDB.QueryRow(
+		`SELECT sa.status, sa.error_code, wr.status FROM step_attempts sa
+		 JOIN workflow_runs wr ON wr.id = sa.run_id
+		 WHERE sa.run_id = $1 AND sa.node_id = 'action-1'`, runID).
+		Scan(&stepStatus, &errCode, &runStatus); err != nil {
+		t.Fatal(err)
+	}
+	if stepStatus != "failed" || errCode != "unknown_action" || runStatus != "failed" {
+		t.Fatalf("step=%q code=%q run=%q", stepStatus, errCode, runStatus)
+	}
+}
+
+// jsonContains is a loose substring check on JSONB text rendering.
+func jsonContains(doc, sub string) bool {
+	for i := 0; i+len(sub) <= len(doc); i++ {
+		if doc[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}
