@@ -96,3 +96,17 @@ UPDATE outbox_messages SET published_at = now() WHERE id = $1;
 -- name: GetRunByIdempotencyKey :one
 SELECT * FROM workflow_runs
 WHERE workflow_id = $1 AND idempotency_key = $2;
+
+-- name: GetRunForUpdate :one
+SELECT * FROM workflow_runs WHERE id = $1 FOR UPDATE;
+
+-- name: NextAttemptNumber :one
+SELECT COALESCE(MAX(attempt_number), 0) + 1 FROM step_attempts
+WHERE run_id = $1 AND node_id = $2;
+
+-- name: CountActiveStepAttempts :one
+SELECT count(*) FROM step_attempts
+WHERE run_id = $1 AND status IN ('pending', 'running');
+
+-- name: GetWorkflowVersionByID :one
+SELECT * FROM workflow_versions WHERE id = $1;

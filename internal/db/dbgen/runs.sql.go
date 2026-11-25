@@ -82,6 +82,18 @@ func (q *Queries) ClaimOutboxBatch(ctx context.Context, limit int32) ([]OutboxMe
 	return items, nil
 }
 
+const countActiveStepAttempts = `-- name: CountActiveStepAttempts :one
+SELECT count(*) FROM step_attempts
+WHERE run_id = $1 AND status IN ('pending', 'running')
+`
+
+func (q *Queries) CountActiveStepAttempts(ctx context.Context, runID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countActiveStepAttempts, runID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createRun = `-- name: CreateRun :one
 INSERT INTO workflow_runs
     (workflow_id, workflow_version_id, variables, idempotency_key, triggered_by, trigger_type)
@@ -331,6 +343,54 @@ func (q *Queries) GetRunByIdempotencyKey(ctx context.Context, arg GetRunByIdempo
 	return i, err
 }
 
+const getRunForUpdate = `-- name: GetRunForUpdate :one
+SELECT id, workflow_id, workflow_version_id, status, variables, idempotency_key, triggered_by, trigger_type, cancel_requested_at, started_at, finished_at, created_at, updated_at, row_version FROM workflow_runs WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) GetRunForUpdate(ctx context.Context, id pgtype.UUID) (WorkflowRun, error) {
+	row := q.db.QueryRow(ctx, getRunForUpdate, id)
+	var i WorkflowRun
+	err := row.Scan(
+		&i.ID,
+		&i.WorkflowID,
+		&i.WorkflowVersionID,
+		&i.Status,
+		&i.Variables,
+		&i.IdempotencyKey,
+		&i.TriggeredBy,
+		&i.TriggerType,
+		&i.CancelRequestedAt,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.RowVersion,
+	)
+	return i, err
+}
+
+const getWorkflowVersionByID = `-- name: GetWorkflowVersionByID :one
+SELECT id, workflow_id, version_number, status, graph_json, content_hash, created_by, created_at, published_at, row_version FROM workflow_versions WHERE id = $1
+`
+
+func (q *Queries) GetWorkflowVersionByID(ctx context.Context, id pgtype.UUID) (WorkflowVersion, error) {
+	row := q.db.QueryRow(ctx, getWorkflowVersionByID, id)
+	var i WorkflowVersion
+	err := row.Scan(
+		&i.ID,
+		&i.WorkflowID,
+		&i.VersionNumber,
+		&i.Status,
+		&i.GraphJson,
+		&i.ContentHash,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.PublishedAt,
+		&i.RowVersion,
+	)
+	return i, err
+}
+
 const listRunEvents = `-- name: ListRunEvents :many
 SELECT id, run_id, sequence, event_type, payload, created_at FROM run_events
 WHERE run_id = $1 AND sequence > $2
@@ -467,6 +527,23 @@ UPDATE outbox_messages SET published_at = now() WHERE id = $1
 func (q *Queries) MarkOutboxPublished(ctx context.Context, id int64) error {
 	_, err := q.db.Exec(ctx, markOutboxPublished, id)
 	return err
+}
+
+const nextAttemptNumber = `-- name: NextAttemptNumber :one
+SELECT COALESCE(MAX(attempt_number), 0) + 1 FROM step_attempts
+WHERE run_id = $1 AND node_id = $2
+`
+
+type NextAttemptNumberParams struct {
+	RunID  pgtype.UUID `json:"run_id"`
+	NodeID string      `json:"node_id"`
+}
+
+func (q *Queries) NextAttemptNumber(ctx context.Context, arg NextAttemptNumberParams) (int32, error) {
+	row := q.db.QueryRow(ctx, nextAttemptNumber, arg.RunID, arg.NodeID)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const requestRunCancellation = `-- name: RequestRunCancellation :one
