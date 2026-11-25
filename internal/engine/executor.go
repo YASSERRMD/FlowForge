@@ -36,6 +36,10 @@ type stepError struct {
 
 func (e *stepError) Error() string { return e.message }
 
+// maxAttemptPayloadBytes bounds per-attempt input/output documents so a
+// runaway action cannot write unbounded payloads into step_attempts.
+const maxAttemptPayloadBytes = 256 * 1024
+
 // Executor runs one node of one run inside a single transaction: it locks
 // the run, records the attempt, executes the node kind, persists the
 // outcome with its events and enqueues successor dispatches.
@@ -113,6 +117,13 @@ func (e *Executor) ExecuteNode(ctx context.Context, runID, nodeID string) error 
 	// Record the attempt and mark it running with its input snapshot.
 	attempt, err := e.startAttempt(ctx, q, run, node)
 	if err != nil {
+		var serr *stepError
+		if errors.As(err, &serr) {
+			if ferr := e.failRun(ctx, q, run, node.ID, serr.code, serr.message); ferr != nil {
+				return ferr
+			}
+			return commitTx(tx)
+		}
 		return err
 	}
 
@@ -140,6 +151,13 @@ func (e *Executor) ExecuteNode(ctx context.Context, runID, nodeID string) error 
 func (e *Executor) startAttempt(ctx context.Context, q *dbgen.Queries,
 	run dbgen.WorkflowRun, node graph.Node) (dbgen.StepAttempt, error) {
 
+	input := attemptInput(node)
+	if len(input) > maxAttemptPayloadBytes {
+		// Corrupt configuration, not runtime data: fail the run without an
+		// attempt rather than record a poisoned input snapshot.
+		return dbgen.StepAttempt{}, &stepError{code: "input_too_large",
+			message: fmt.Sprintf("attempt input exceeds %d bytes", maxAttemptPayloadBytes)}
+	}
 	next, err := q.NextAttemptNumber(ctx, dbgen.NextAttemptNumberParams{
 		RunID:  run.ID,
 		NodeID: node.ID,
@@ -157,7 +175,6 @@ func (e *Executor) startAttempt(ctx context.Context, q *dbgen.Queries,
 		return dbgen.StepAttempt{}, fmt.Errorf("create attempt: %w", err)
 	}
 
-	input := attemptInput(node)
 	attempt, err = q.StartStepAttempt(ctx, dbgen.StartStepAttemptParams{
 		ID:            attempt.ID,
 		AttemptNumber: next,
@@ -236,6 +253,12 @@ func (e *Executor) succeedStep(ctx context.Context, q *dbgen.Queries,
 	run dbgen.WorkflowRun, node graph.Node, attempt dbgen.StepAttempt,
 	output json.RawMessage, g *graph.Graph) error {
 
+	if len(output) > maxAttemptPayloadBytes {
+		return e.failStep(ctx, q, run, node, attempt, &stepError{
+			code:    "output_too_large",
+			message: fmt.Sprintf("action output exceeds %d bytes", maxAttemptPayloadBytes),
+		})
+	}
 	if _, err := q.FinishStepAttempt(ctx, dbgen.FinishStepAttemptParams{
 		ID:         attempt.ID,
 		Status:     string(StepSucceeded),
