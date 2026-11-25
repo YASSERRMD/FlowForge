@@ -193,6 +193,10 @@ func (e *Executor) executeNode(ctx context.Context, _ *dbgen.Queries,
 		return json.RawMessage(run.Variables), nil
 	case graph.KindAction:
 		return e.executeAction(ctx, node)
+	case graph.KindEnd:
+		// The end node carries no behavior; completion is decided after the
+		// attempt closes, when durable state is checked.
+		return json.RawMessage(`{}`), nil
 	default:
 		return nil, &stepError{
 			code:    "unsupported_node_kind",
@@ -247,12 +251,41 @@ func (e *Executor) succeedStep(ctx context.Context, q *dbgen.Queries,
 		return err
 	}
 
+	if node.Kind == graph.KindEnd {
+		return e.maybeCompleteRun(ctx, q, run, node.ID)
+	}
 	for _, edge := range successorEdges(g, node.ID, "") {
 		if err := EnqueueStep(ctx, q, uuidOf(run.ID), edge.Target); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// maybeCompleteRun finishes the run only when durable state agrees the
+// graph is done: no active step attempts and no pending dispatches remain.
+func (e *Executor) maybeCompleteRun(ctx context.Context, q *dbgen.Queries,
+	run dbgen.WorkflowRun, endNodeID string) error {
+
+	active, err := q.CountActiveStepAttempts(ctx, run.ID)
+	if err != nil {
+		return fmt.Errorf("count active steps: %w", err)
+	}
+	pending, err := q.CountPendingStepTasks(ctx, dbgen.CountPendingStepTasksParams{
+		DedupeKey:   "run:" + uuidOf(run.ID) + ":%",
+		DedupeKey_2: StepTaskDedupeKey(uuidOf(run.ID), endNodeID),
+	})
+	if err != nil {
+		return fmt.Errorf("count pending tasks: %w", err)
+	}
+	if active > 0 || pending > 0 {
+		// Other branches are still in flight; the last end node to finish
+		// with a quiet queue completes the run.
+		return nil
+	}
+	return e.finishRun(ctx, q, run, RunSucceeded, map[string]any{
+		"runId": uuidOf(run.ID),
+	})
 }
 
 // failStep records the step failure, emits step.failed and fails the run

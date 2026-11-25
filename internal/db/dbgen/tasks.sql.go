@@ -90,6 +90,25 @@ func (q *Queries) CompleteTask(ctx context.Context, arg CompleteTaskParams) erro
 	return err
 }
 
+const countPendingStepTasks = `-- name: CountPendingStepTasks :one
+SELECT count(*) FROM scheduled_tasks
+WHERE task_type = 'execute_node' AND status = 'pending'
+  AND dedupe_key LIKE $1 AND dedupe_key <> $2
+`
+
+type CountPendingStepTasksParams struct {
+	DedupeKey   string `json:"dedupe_key"`
+	DedupeKey_2 string `json:"dedupe_key_2"`
+}
+
+// Pending dispatches of one run, excluding the task currently executing.
+func (q *Queries) CountPendingStepTasks(ctx context.Context, arg CountPendingStepTasksParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countPendingStepTasks, arg.DedupeKey, arg.DedupeKey_2)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const enqueueTask = `-- name: EnqueueTask :one
 INSERT INTO scheduled_tasks (task_type, dedupe_key, payload, run_at, max_attempts)
 VALUES ($1, $2, $3, COALESCE($4::timestamptz, now()), $5)

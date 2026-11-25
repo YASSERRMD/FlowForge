@@ -255,3 +255,92 @@ func jsonContains(doc, sub string) bool {
 	}
 	return false
 }
+
+func TestEndNodeCompletesRun(t *testing.T) {
+	f := newFixture(t)
+	detail := f.createPublished("Full sequential", sequentialGraph)
+	created, err := f.svc.CreateRun(f.ctx, f.ownerID, detail.ID,
+		jsonRaw(`{"invoice_id":"inv-42"}`), "")
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	runID := uuidString(t, created.Run.ID.Bytes[:])
+
+	executeDrain(t, f, runID)
+
+	var status string
+	var startedAt, finishedAt string
+	if err := f.sqlDB.QueryRow(
+		`SELECT status, coalesce(started_at::text,''), coalesce(finished_at::text,'')
+		 FROM workflow_runs WHERE id = $1`, runID).Scan(&status, &startedAt, &finishedAt); err != nil {
+		t.Fatal(err)
+	}
+	if status != "succeeded" {
+		t.Fatalf("run status = %q, want succeeded", status)
+	}
+	if startedAt == "" || finishedAt == "" {
+		t.Fatalf("run missing timestamps: started=%q finished=%q", startedAt, finishedAt)
+	}
+
+	// Every node has exactly one succeeded attempt.
+	rows, err := f.sqlDB.Query(
+		`SELECT node_id, status FROM step_attempts WHERE run_id = $1 ORDER BY created_at`, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	steps := map[string]string{}
+	for rows.Next() {
+		var n, st string
+		if err := rows.Scan(&n, &st); err != nil {
+			t.Fatal(err)
+		}
+		steps[n] = st
+	}
+	for _, nodeID := range []string{"start-1", "action-1", "end-1"} {
+		if steps[nodeID] != "succeeded" {
+			t.Fatalf("node %s status = %q (all: %v)", nodeID, steps[nodeID], steps)
+		}
+	}
+
+	// The event stream closes with run.succeeded.
+	var last string
+	if err := f.sqlDB.QueryRow(
+		`SELECT event_type FROM run_events WHERE run_id = $1 ORDER BY sequence DESC LIMIT 1`,
+		runID).Scan(&last); err != nil {
+		t.Fatal(err)
+	}
+	if last != "run.succeeded" {
+		t.Fatalf("last event = %q, want run.succeeded", last)
+	}
+}
+
+func TestEndNodeWaitsForActiveSteps(t *testing.T) {
+	f := newFixture(t)
+	detail := f.createPublished("End check", sequentialGraph)
+	created, err := f.svc.CreateRun(f.ctx, f.ownerID, detail.ID, nil, "")
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	runID := uuidString(t, created.Run.ID.Bytes[:])
+
+	// Simulate another branch still running while end finishes.
+	if _, err := f.pool.Exec(f.ctx,
+		`INSERT INTO step_attempts (run_id, node_id, node_type, attempt_number, status)
+		 VALUES ($1, 'action-1', 'action', 1, 'running')`, runID); err != nil {
+		t.Fatal(err)
+	}
+
+	ex := engine.NewExecutor(f.pool)
+	if err := ex.ExecuteNode(f.ctx, runID, "end-1"); err != nil {
+		t.Fatalf("end node: %v", err)
+	}
+	var status string
+	if err := f.sqlDB.QueryRow(
+		`SELECT status FROM workflow_runs WHERE id = $1`, runID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status == "succeeded" {
+		t.Fatal("run completed while a step was still running")
+	}
+}
