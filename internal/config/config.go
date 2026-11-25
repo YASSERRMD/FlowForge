@@ -34,7 +34,7 @@ type Config struct {
 	PollInterval      time.Duration
 	// WorkerHealthAddr is the worker's liveness/readiness listener.
 	WorkerHealthAddr string
-	SessionSecret     string
+	SessionSecret    string
 	// DevAuthEnabled allows the explicit development-only auth bypass. It is
 	// rejected in production regardless of intent.
 	DevAuthEnabled bool
