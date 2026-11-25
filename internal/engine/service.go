@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -54,10 +55,13 @@ type CreatedRun struct {
 // first dispatch.
 type Service struct {
 	pool *pgxpool.Pool
+	now  func() time.Time
 }
 
 // NewService builds a Service over pool.
-func NewService(pool *pgxpool.Pool) *Service { return &Service{pool: pool} }
+func NewService(pool *pgxpool.Pool) *Service {
+	return &Service{pool: pool, now: time.Now}
+}
 
 func parseUUID(s string) (pgtype.UUID, error) {
 	var id pgtype.UUID
@@ -250,4 +254,142 @@ func mustJSON(v any) []byte {
 		panic(fmt.Sprintf("marshal static payload: %v", err))
 	}
 	return data
+}
+
+// AttemptView is the API view of one step attempt.
+type AttemptView struct {
+	AttemptNumber int32           `json:"attemptNumber"`
+	Status        string          `json:"status"`
+	Input         json.RawMessage `json:"input,omitempty"`
+	Output        json.RawMessage `json:"output,omitempty"`
+	ErrorCode     string          `json:"errorCode,omitempty"`
+	ErrorMessage  string          `json:"errorMessage,omitempty"`
+	StartedAt     string          `json:"startedAt,omitempty"`
+	FinishedAt    string          `json:"finishedAt,omitempty"`
+}
+
+// NodeState is the latest durable state of one graph node in a run.
+type NodeState struct {
+	NodeID   string        `json:"nodeId"`
+	NodeType string        `json:"nodeType"`
+	Status   string        `json:"status"`
+	Attempts []AttemptView `json:"attempts"`
+}
+
+// RunDetail is the read model for the run detail endpoint.
+type RunDetail struct {
+	ID            string          `json:"id"`
+	WorkflowID    string          `json:"workflowId"`
+	VersionNumber int32           `json:"versionNumber"`
+	Status        string          `json:"status"`
+	TriggerType   string          `json:"triggerType"`
+	Variables     json.RawMessage `json:"variables"`
+	StartedAt     string          `json:"startedAt,omitempty"`
+	FinishedAt    string          `json:"finishedAt,omitempty"`
+	DurationMs    int64           `json:"durationMs,omitempty"`
+	Nodes         []NodeState     `json:"nodes"`
+	CreatedAt     string          `json:"createdAt"`
+}
+
+// ErrRunNotFound means the run does not exist or is not visible to the
+// caller.
+var ErrRunNotFound = errors.New("run not found")
+
+// GetRunDetail returns the read model for one run, scoped to its owner.
+func (s *Service) GetRunDetail(ctx context.Context, callerID, runID string) (*RunDetail, error) {
+	rid, err := parseUUID(runID)
+	if err != nil {
+		return nil, ErrRunNotFound
+	}
+	caller, err := parseUUID(callerID)
+	if err != nil {
+		return nil, fmt.Errorf("parse caller: %w", err)
+	}
+	q := dbgen.New(s.pool)
+	run, err := q.GetRun(ctx, rid)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrRunNotFound
+		}
+		return nil, fmt.Errorf("load run: %w", err)
+	}
+	wf, err := q.GetWorkflow(ctx, run.WorkflowID)
+	if err != nil {
+		return nil, fmt.Errorf("load workflow: %w", err)
+	}
+	if wf.OwnerID != caller {
+		return nil, ErrRunNotFound
+	}
+	version, err := q.GetWorkflowVersionByID(ctx, run.WorkflowVersionID)
+	if err != nil {
+		return nil, fmt.Errorf("load version: %w", err)
+	}
+	attempts, err := q.ListStepAttemptsByRun(ctx, rid)
+	if err != nil {
+		return nil, fmt.Errorf("list attempts: %w", err)
+	}
+
+	// Group attempts by node, preserving first-seen node order.
+	order := []string{}
+	byNode := map[string]*NodeState{}
+	for _, a := range attempts {
+		ns, ok := byNode[a.NodeID]
+		if !ok {
+			ns = &NodeState{NodeID: a.NodeID, NodeType: a.NodeType, Status: a.Status}
+			byNode[a.NodeID] = ns
+			order = append(order, a.NodeID)
+		}
+		ns.Attempts = append(ns.Attempts, AttemptView{
+			AttemptNumber: a.AttemptNumber,
+			Status:        a.Status,
+			Input:         a.InputJson,
+			Output:        a.OutputJson,
+			ErrorCode:     deref(a.ErrorCode),
+			ErrorMessage:  deref(a.ErrorMessage),
+			StartedAt:     formatTS(a.StartedAt),
+			FinishedAt:    formatTS(a.FinishedAt),
+		})
+		ns.Status = a.Status // attempts arrive in attempt order; latest wins
+	}
+	nodes := make([]NodeState, 0, len(order))
+	for _, id := range order {
+		nodes = append(nodes, *byNode[id])
+	}
+
+	detail := &RunDetail{
+		ID:            uuidOf(run.ID),
+		WorkflowID:    uuidOf(run.WorkflowID),
+		VersionNumber: version.VersionNumber,
+		Status:        run.Status,
+		TriggerType:   run.TriggerType,
+		Variables:     run.Variables,
+		StartedAt:     formatTS(run.StartedAt),
+		FinishedAt:    formatTS(run.FinishedAt),
+		Nodes:         nodes,
+		CreatedAt:     run.CreatedAt.Time.UTC().Format(tsLayout),
+	}
+	if run.StartedAt.Valid {
+		end := run.FinishedAt.Time
+		if !run.FinishedAt.Valid {
+			end = s.now()
+		}
+		detail.DurationMs = end.Sub(run.StartedAt.Time).Milliseconds()
+	}
+	return detail, nil
+}
+
+const tsLayout = "2006-01-02T15:04:05.999999999Z07:00"
+
+func formatTS(ts pgtype.Timestamptz) string {
+	if !ts.Valid {
+		return ""
+	}
+	return ts.Time.UTC().Format(tsLayout)
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }

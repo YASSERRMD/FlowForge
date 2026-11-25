@@ -209,3 +209,54 @@ func uuidString(t *testing.T, b []byte) string {
 	}
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
+
+func TestGetRunDetailReturnsNodeStates(t *testing.T) {
+	f := newFixture(t)
+	detail := f.createPublished("Detail", sequentialGraph)
+	created, err := f.svc.CreateRun(f.ctx, f.ownerID, detail.ID, jsonRaw(`{"a":1}`), "")
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	runID := uuidString(t, created.Run.ID.Bytes[:])
+	executeDrain(t, f, runID)
+
+	d, err := f.svc.GetRunDetail(f.ctx, f.ownerID, runID)
+	if err != nil {
+		t.Fatalf("get detail: %v", err)
+	}
+	if d.Status != "succeeded" || d.VersionNumber != 1 {
+		t.Fatalf("status=%q version=%d", d.Status, d.VersionNumber)
+	}
+	if len(d.Nodes) != 3 {
+		t.Fatalf("expected 3 node states, got %d", len(d.Nodes))
+	}
+	for _, n := range d.Nodes {
+		if n.Status != "succeeded" || len(n.Attempts) != 1 {
+			t.Fatalf("node %s: status=%q attempts=%d", n.NodeID, n.Status, len(n.Attempts))
+		}
+		if n.Attempts[0].StartedAt == "" || n.Attempts[0].FinishedAt == "" {
+			t.Fatalf("node %s missing timestamps: %+v", n.NodeID, n.Attempts[0])
+		}
+	}
+	if d.StartedAt == "" || d.FinishedAt == "" {
+		t.Fatal("run timestamps missing")
+	}
+}
+
+func TestGetRunDetailScopesToOwner(t *testing.T) {
+	f := newFixture(t)
+	detail := f.createPublished("Scoped", sequentialGraph)
+	created, err := f.svc.CreateRun(f.ctx, f.ownerID, detail.ID, nil, "")
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	runID := uuidString(t, created.Run.ID.Bytes[:])
+
+	other, err := f.store.EnsureUser(f.ctx, "dev-eve@dev.flowforge.local", "eve")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.GetRunDetail(f.ctx, other, runID); !errors.Is(err, engine.ErrRunNotFound) {
+		t.Fatalf("expected ErrRunNotFound, got %v", err)
+	}
+}

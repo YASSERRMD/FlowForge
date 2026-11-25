@@ -80,6 +80,7 @@ func New(cfg config.Config, log *slog.Logger, opts ...Option) *Server {
 				r.With(s.requireWorkflowStore).Post("/{workflowID}/versions/{versionNumber}/copy-to-draft", s.handleCopyVersionToDraft)
 				r.With(s.requireWorkflowStore, s.requireEngine).Post("/{workflowID}/runs", s.handleCreateRun)
 			})
+			r.With(s.requireWorkflowStore, s.requireEngine).Get("/runs/{runID}", s.handleGetRun)
 		})
 	})
 	s.router = r

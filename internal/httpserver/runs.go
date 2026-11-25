@@ -15,10 +15,11 @@ import (
 	"github.com/YASSERRMD/FlowForge/internal/engine"
 )
 
-// EngineService abstracts run initiation for the HTTP layer.
+// EngineService abstracts run initiation and inspection for the HTTP layer.
 type EngineService interface {
 	CreateRun(ctx context.Context, callerID, workflowID string,
 		input json.RawMessage, idempotencyKey string) (*engine.CreatedRun, error)
+	GetRunDetail(ctx context.Context, callerID, runID string) (*engine.RunDetail, error)
 }
 
 // createRunRequest is the body of POST /workflows/{id}/runs. Both fields
@@ -88,6 +89,21 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleGetRun returns the read-only run detail: status, node states,
+// duration and structured attempts.
+func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := s.ownerOrError(w, r)
+	if !ok {
+		return
+	}
+	detail, err := s.engine.GetRunDetail(r.Context(), ownerID, chi.URLParam(r, "runID"))
+	if err != nil {
+		s.writeEngineError(w, r, err)
+		return
+	}
+	apierror.JSON(w, http.StatusOK, detail)
+}
+
 func (s *Server) writeEngineError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, engine.ErrWorkflowNotFound):
@@ -95,6 +111,8 @@ func (s *Server) writeEngineError(w http.ResponseWriter, r *http.Request, err er
 	case errors.Is(err, engine.ErrNoPublishedVersion):
 		apierror.Write(w, r, s.log, apierror.New(apierror.CodeConflict,
 			"workflow has no published version; publish before running"))
+	case errors.Is(err, engine.ErrRunNotFound):
+		apierror.Write(w, r, s.log, apierror.New(apierror.CodeNotFound, "run not found"))
 	case errors.Is(err, engine.ErrInvalidInput):
 		apierror.Write(w, r, s.log, apierror.Validation(
 			apierror.FieldError{Field: "input", Message: err.Error()}))

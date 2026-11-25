@@ -14,6 +14,9 @@ import (
 )
 
 type fakeEngine struct {
+	detail    *engine.RunDetail
+	detailErr error
+
 	lastCaller   string
 	lastWorkflow string
 	lastInput    json.RawMessage
@@ -43,6 +46,13 @@ func (f *fakeEngine) CreateRun(_ context.Context, callerID, workflowID string,
 		Version:      dbgen.WorkflowVersion{VersionNumber: 1},
 		ReplayedFrom: f.replayed,
 	}, nil
+}
+
+func (f *fakeEngine) GetRunDetail(_ context.Context, callerID, runID string) (*engine.RunDetail, error) {
+	if f.detailErr != nil {
+		return nil, f.detailErr
+	}
+	return f.detail, nil
 }
 
 func newRunServer(t *testing.T, eng EngineService) http.Handler {
@@ -133,6 +143,45 @@ func TestCreateRunRequiresEngine(t *testing.T) {
 	rec := doJSON(t, h, http.MethodPost,
 		"/api/v1/workflows/22222222-2222-2222-2222-222222222222/runs", "", nil)
 	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGetRunRoute(t *testing.T) {
+	eng := &fakeEngine{detail: &engine.RunDetail{
+		ID: "11111111-1111-1111-1111-111111111111", Status: "succeeded",
+		VersionNumber: 3, DurationMs: 12,
+		Nodes: []engine.NodeState{{NodeID: "start-1", NodeType: "start", Status: "succeeded"}},
+	}}
+	h := newRunServer(t, eng)
+	rec := doJSON(t, h, http.MethodGet,
+		"/api/v1/runs/11111111-1111-1111-1111-111111111111", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		ID       string `json:"id"`
+		Status   string `json:"status"`
+		Duration int64  `json:"durationMs"`
+		Nodes    []struct {
+			NodeID string `json:"nodeId"`
+			Status string `json:"status"`
+		} `json:"nodes"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Status != "succeeded" || body.Duration != 12 || len(body.Nodes) != 1 {
+		t.Fatalf("unexpected body: %+v", body)
+	}
+}
+
+func TestGetRunNotFound(t *testing.T) {
+	eng := &fakeEngine{detailErr: engine.ErrRunNotFound}
+	h := newRunServer(t, eng)
+	rec := doJSON(t, h, http.MethodGet,
+		"/api/v1/runs/99999999-9999-9999-9999-999999999999", "", nil)
+	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 }
