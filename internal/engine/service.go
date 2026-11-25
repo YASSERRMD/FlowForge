@@ -222,8 +222,12 @@ func (s *Service) appendRunCreated(ctx context.Context, q *dbgen.Queries,
 		return fmt.Errorf("append run.created: %w", err)
 	}
 	if _, err := q.EnqueueOutbox(ctx, dbgen.EnqueueOutboxParams{
-		Topic:   TopicRunEvents,
-		Payload: mustJSON(map[string]any{"type": "run.created", "data": json.RawMessage(payload)}),
+		Topic: TopicRunEvents,
+		Payload: mustJSON(map[string]any{
+			"type":  "run.created",
+			"runId": uuidOf(run.ID),
+			"data":  json.RawMessage(payload),
+		}),
 	}); err != nil {
 		return fmt.Errorf("enqueue outbox: %w", err)
 	}
