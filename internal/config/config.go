@@ -32,6 +32,8 @@ type Config struct {
 	WorkerID          string
 	WorkerConcurrency int
 	PollInterval      time.Duration
+	// WorkerHealthAddr is the worker's liveness/readiness listener.
+	WorkerHealthAddr string
 	SessionSecret     string
 	// DevAuthEnabled allows the explicit development-only auth bypass. It is
 	// rejected in production regardless of intent.
@@ -67,6 +69,7 @@ func Load(getenv func(string) string) (Config, error) {
 		DatabaseURL:      getenv("DATABASE_URL"),
 		RedisURL:         getenv("REDIS_URL"),
 		WorkerID:         valueOr(getenv("WORKER_ID"), "worker-local-1"),
+		WorkerHealthAddr: valueOr(getenv("WORKER_HEALTH_ADDR"), "127.0.0.1:8081"),
 		SessionSecret:    getenv("SESSION_SECRET"),
 		PollInterval:     defaultPollInterval,
 		ReadTimeout:      defaultReadTimeout,
