@@ -1,9 +1,9 @@
 # FlowForge execution status
 
-- Current phase: 07 (gate: push/PR/merge pending)
-- Current branch: phase/07-workflow-versioning-templates
+- Current phase: 08 (gate: push/PR/merge pending)
+- Current branch: phase/08-execution-core-sequential
 - Repository remote: https://github.com/YASSERRMD/FlowForge.git
-- Last verified merge to main: PR #6 `0133911` (phase 06, merge commit)
+- Last verified merge to main: PR #7 `3c313a1` (phase 07, merge commit)
 - Environment availability: Go [1.25.5], Node [24.11.1], package manager
   [pnpm 10.22.0], Docker [29.0.1], PostgreSQL [via Docker],
   Redis [via Docker], GitHub auth [gh 2.83.2, account YASSERRMD, scopes: repo]
