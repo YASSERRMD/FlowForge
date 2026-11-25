@@ -445,6 +445,59 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+  /api/v1/workflows/{workflowID}/runs:
+    post:
+      tags: [runs]
+      summary: Start a run of the published version
+      description: Validates the workflow's published version, normalizes the
+        input JSON object and atomically creates a queued run, its first
+        event/outbox messages and the start-node dispatch. Repeating the same
+        idempotencyKey returns the earlier run instead of duplicating it.
+      operationId: createRun
+      parameters:
+        - $ref: "#/components/parameters/DevUser"
+        - $ref: "#/components/parameters/WorkflowID"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                input:
+                  type: object
+                  description: Run input; must be a JSON object, max 64 KiB
+                idempotencyKey:
+                  type: string
+                  maxLength: 200
+      responses:
+        "201":
+          description: Run created and queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        "200":
+          description: Idempotency key replayed; the earlier run is returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The workflow has no published version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "400":
+          description: The run input is not a JSON object
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 components:
   parameters:
     DevUser:
@@ -605,6 +658,30 @@ components:
         contentHash:
           type: string
         publishedAt:
+          type: string
+          format: date-time
+    Run:
+      type: object
+      required: [id, workflowId, versionNumber, status, triggerType, replayed, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        workflowId:
+          type: string
+          format: uuid
+        versionNumber:
+          type: integer
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed, canceled]
+        triggerType:
+          type: string
+          enum: [manual, schedule, api, retry]
+        replayed:
+          type: boolean
+          description: true when the idempotency key matched an earlier run
+        createdAt:
           type: string
           format: date-time
     Template:

@@ -25,6 +25,7 @@ type Server struct {
 	checker   *Checker
 	auth      Authenticator
 	workflows WorkflowStore
+	engine    EngineService
 }
 
 // Option customizes a Server at construction.
@@ -34,6 +35,11 @@ type Option func(*Server)
 // routes answer 503.
 func WithWorkflowStore(store WorkflowStore) Option {
 	return func(s *Server) { s.workflows = store }
+}
+
+// WithEngine wires run execution; without it the run routes answer 503.
+func WithEngine(svc EngineService) Option {
+	return func(s *Server) { s.engine = svc }
 }
 
 // New builds the server with its route table and middleware stack.
@@ -72,6 +78,7 @@ func New(cfg config.Config, log *slog.Logger, opts ...Option) *Server {
 				r.With(s.requireWorkflowStore).Get("/{workflowID}/versions", s.handleListVersions)
 				r.With(s.requireWorkflowStore).Get("/{workflowID}/versions/{versionNumber}", s.handleGetVersion)
 				r.With(s.requireWorkflowStore).Post("/{workflowID}/versions/{versionNumber}/copy-to-draft", s.handleCopyVersionToDraft)
+				r.With(s.requireWorkflowStore, s.requireEngine).Post("/{workflowID}/runs", s.handleCreateRun)
 			})
 		})
 	})

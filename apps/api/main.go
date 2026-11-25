@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/YASSERRMD/FlowForge/internal/config"
+	"github.com/YASSERRMD/FlowForge/internal/engine"
 	"github.com/YASSERRMD/FlowForge/internal/httpserver"
 	"github.com/YASSERRMD/FlowForge/internal/workflowstore"
 )
@@ -42,6 +43,7 @@ func main() {
 	}
 	defer pool.Close()
 	opts = append(opts, httpserver.WithWorkflowStore(workflowstore.New(pool)))
+	opts = append(opts, httpserver.WithEngine(engine.NewService(pool)))
 
 	srv := httpserver.New(cfg, log, opts...)
 	srv.RegisterReadinessCheck("postgres", func(ctx context.Context) error {

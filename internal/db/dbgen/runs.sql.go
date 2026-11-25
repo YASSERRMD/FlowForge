@@ -299,6 +299,38 @@ func (q *Queries) GetRun(ctx context.Context, id pgtype.UUID) (WorkflowRun, erro
 	return i, err
 }
 
+const getRunByIdempotencyKey = `-- name: GetRunByIdempotencyKey :one
+SELECT id, workflow_id, workflow_version_id, status, variables, idempotency_key, triggered_by, trigger_type, cancel_requested_at, started_at, finished_at, created_at, updated_at, row_version FROM workflow_runs
+WHERE workflow_id = $1 AND idempotency_key = $2
+`
+
+type GetRunByIdempotencyKeyParams struct {
+	WorkflowID     pgtype.UUID `json:"workflow_id"`
+	IdempotencyKey *string     `json:"idempotency_key"`
+}
+
+func (q *Queries) GetRunByIdempotencyKey(ctx context.Context, arg GetRunByIdempotencyKeyParams) (WorkflowRun, error) {
+	row := q.db.QueryRow(ctx, getRunByIdempotencyKey, arg.WorkflowID, arg.IdempotencyKey)
+	var i WorkflowRun
+	err := row.Scan(
+		&i.ID,
+		&i.WorkflowID,
+		&i.WorkflowVersionID,
+		&i.Status,
+		&i.Variables,
+		&i.IdempotencyKey,
+		&i.TriggeredBy,
+		&i.TriggerType,
+		&i.CancelRequestedAt,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.RowVersion,
+	)
+	return i, err
+}
+
 const listRunEvents = `-- name: ListRunEvents :many
 SELECT id, run_id, sequence, event_type, payload, created_at FROM run_events
 WHERE run_id = $1 AND sequence > $2

@@ -92,3 +92,7 @@ RETURNING *;
 
 -- name: MarkOutboxPublished :exec
 UPDATE outbox_messages SET published_at = now() WHERE id = $1;
+
+-- name: GetRunByIdempotencyKey :one
+SELECT * FROM workflow_runs
+WHERE workflow_id = $1 AND idempotency_key = $2;
