@@ -12,6 +12,8 @@ import (
 	"github.com/YASSERRMD/FlowForge/internal/db"
 	"github.com/YASSERRMD/FlowForge/internal/db/dbgen"
 	"github.com/YASSERRMD/FlowForge/internal/engine"
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/YASSERRMD/FlowForge/internal/testutil"
 	"github.com/YASSERRMD/FlowForge/internal/workflowstore"
 )
@@ -30,6 +32,7 @@ const sequentialGraph = `{"schemaVersion":"1","nodes":[` +
 type fixture struct {
 	t       *testing.T
 	sqlDB   *sql.DB
+	pool    *pgxpool.Pool
 	store   *workflowstore.Store
 	svc     *engine.Service
 	q       *dbgen.Queries
@@ -52,6 +55,7 @@ func newFixture(t *testing.T) *fixture {
 	f := &fixture{
 		t:     t,
 		sqlDB: sqlDB,
+		pool:  pool,
 		store: workflowstore.New(pool),
 		svc:   engine.NewService(pool),
 		q:     dbgen.New(pool),

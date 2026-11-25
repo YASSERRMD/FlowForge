@@ -194,13 +194,8 @@ func (s *Service) CreateRun(ctx context.Context, callerID, workflowID string,
 	if err := s.appendRunCreated(ctx, qtx, run, version); err != nil {
 		return nil, err
 	}
-	if _, err := qtx.EnqueueTask(ctx, dbgen.EnqueueTaskParams{
-		TaskType:    TaskExecuteNode,
-		DedupeKey:   StepTaskDedupeKey(uuidOf(run.ID), startNode.ID),
-		Payload:     mustJSON(map[string]any{"runId": uuidOf(run.ID), "nodeId": startNode.ID}),
-		MaxAttempts: maxTaskAttempts,
-	}); err != nil {
-		return nil, fmt.Errorf("enqueue start node: %w", err)
+	if err := EnqueueStep(ctx, qtx, uuidOf(run.ID), startNode.ID); err != nil {
+		return nil, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
