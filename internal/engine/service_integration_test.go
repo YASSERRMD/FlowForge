@@ -31,6 +31,7 @@ const sequentialGraph = `{"schemaVersion":"1","nodes":[` +
 
 type fixture struct {
 	t       *testing.T
+	dsn     string
 	sqlDB   *sql.DB
 	pool    *pgxpool.Pool
 	store   *workflowstore.Store
@@ -54,6 +55,7 @@ func newFixture(t *testing.T) *fixture {
 	pool := testutil.OpenPool(t, dsn)
 	f := &fixture{
 		t:     t,
+		dsn:   dsn,
 		sqlDB: sqlDB,
 		pool:  pool,
 		store: workflowstore.New(pool),
