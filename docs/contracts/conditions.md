@@ -42,6 +42,18 @@ wording is produced by the Go validator (`internal/graph`) and the TypeScript
 mirror (`apps/web/lib/editor/expr.ts`); both are exercised by tests so the
 client and server always agree.
 
+## Safety
+
+Expressions are data, never code. The grammar has no function calls, no
+statement separators, no backticks and no assignment, so `eval(...)`,
+`require(...)`, SQL fragments and shell syntax cannot be expressed. Path
+segments that enable prototype manipulation in dynamic runtimes
+(`__proto__`, `prototype`, `constructor`) are rejected explicitly so the
+same expression is safe in both the Go and TypeScript evaluators. Evaluation
+is a pure function of the expression and the immutable run context: it never
+reads clocks, environment variables, files or the network.
+
+
 ## Examples
 
 ```
