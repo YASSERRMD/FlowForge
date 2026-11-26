@@ -353,3 +353,10 @@ func tokenNode(t *exprToken) exprNode {
 		return literalNode{value: t.value}
 	}
 }
+
+// LookupReference resolves a serialized reference (e.g. "$trigger.a.b") for
+// callers that build node inputs from configured parameters. It returns
+// ok=false for malformed references or missing values.
+func LookupReference(scope ValueScope, ref string) (any, bool) {
+	return resolveRef(scope, ref)
+}

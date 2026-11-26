@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/YASSERRMD/FlowForge/internal/db/dbgen"
@@ -41,10 +42,22 @@ type StepTaskPayload struct {
 // caller's transaction. The dedupe key collapses duplicate enqueues of the
 // same logical node execution onto one row.
 func EnqueueStep(ctx context.Context, q *dbgen.Queries, runID, nodeID string) error {
+	return enqueueStep(ctx, q, runID, nodeID, pgtype.Timestamptz{})
+}
+
+// EnqueueStepAt schedules a node dispatch to become runnable no earlier than
+// runAt. It is used by delay nodes so waiting survives worker restarts
+// without sleeping goroutines.
+func EnqueueStepAt(ctx context.Context, q *dbgen.Queries, runID, nodeID string, runAt pgtype.Timestamptz) error {
+	return enqueueStep(ctx, q, runID, nodeID, runAt)
+}
+
+func enqueueStep(ctx context.Context, q *dbgen.Queries, runID, nodeID string, runAt pgtype.Timestamptz) error {
 	_, err := q.EnqueueTask(ctx, dbgen.EnqueueTaskParams{
 		TaskType:    TaskExecuteNode,
 		DedupeKey:   StepTaskDedupeKey(runID, nodeID),
 		Payload:     mustJSON(StepTaskPayload{RunID: runID, NodeID: nodeID}),
+		Column4:     runAt,
 		MaxAttempts: maxTaskAttempts,
 	})
 	// ON CONFLICT DO NOTHING yields no row: the dispatch already exists.
