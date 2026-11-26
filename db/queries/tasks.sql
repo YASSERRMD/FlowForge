@@ -50,3 +50,9 @@ SET status = CASE WHEN attempts >= max_attempts THEN 'dead' ELSE 'pending' END,
     updated_at = now()
 WHERE id = $1 AND leased_by = $2
 RETURNING *;
+
+-- name: CountPendingStepTasks :one
+-- Pending dispatches of one run, excluding the task currently executing.
+SELECT count(*) FROM scheduled_tasks
+WHERE task_type = 'execute_node' AND status = 'pending'
+  AND dedupe_key LIKE $1 AND dedupe_key <> $2;
