@@ -62,3 +62,14 @@ $steps.action-1.output.status == 200
 not ($trigger.a < 1 or $trigger.b < 2)
 $trigger.threshold <= -3.5
 ```
+
+## Branch routing and skip semantics
+
+A condition node routes to exactly one outgoing handle (`true` or `false`).
+The taken branch is dispatched normally; the untaken branch is marked
+`skipped`. Skips propagate transitively: a downstream node is skipped only
+when **every** predecessor is skipped (or the node is only reachable through
+skipped nodes). A merged node that still has one active predecessor stays
+active and runs normally, so a condition that reconverges does not silently
+drop work. Skipped attempts are terminal, carry a `branch_not_taken` reason,
+and never reserve a queue task.
