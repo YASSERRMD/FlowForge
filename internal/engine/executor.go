@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -385,6 +386,11 @@ func (e *Executor) succeedStep(ctx context.Context, q *dbgen.Queries,
 	}); err != nil {
 		return fmt.Errorf("finish attempt: %w", err)
 	}
+	if node.Kind == graph.KindAction {
+		if err := persistNotification(ctx, q, run, node, result.output); err != nil {
+			return err
+		}
+	}
 	payload := map[string]any{
 		"runId":         uuidOf(run.ID),
 		"nodeId":        node.ID,
@@ -409,6 +415,55 @@ func (e *Executor) succeedStep(ctx context.Context, q *dbgen.Queries,
 		if err := EnqueueStepAt(ctx, q, uuidOf(run.ID), edge.Target, result.runAt); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// persistNotification writes an auditable in-app notification for mock
+// notification actions. It never contacts an external provider.
+func persistNotification(ctx context.Context, q *dbgen.Queries,
+	run dbgen.WorkflowRun, node graph.Node, output []byte) error {
+
+	var cfg actionConfig
+	if len(node.Config) > 0 {
+		if err := json.Unmarshal(node.Config, &cfg); err != nil {
+			return nil
+		}
+	}
+	if !strings.HasPrefix(cfg.ActionType, "mock.notify.") {
+		return nil
+	}
+	var out struct {
+		Channel string `json:"channel"`
+		To      string `json:"to"`
+		Target  string `json:"target"`
+		Subject string `json:"subject"`
+	}
+	if err := json.Unmarshal(output, &out); err != nil {
+		return nil
+	}
+	channel := out.Channel
+	if channel == "" {
+		channel = "inapp"
+	}
+	recipient := out.To
+	if recipient == "" {
+		recipient = out.Target
+	}
+	params := dbgen.InsertNotificationParams{
+		RunID:   run.ID,
+		NodeID:  node.ID,
+		Channel: channel,
+		Payload: output,
+	}
+	if recipient != "" {
+		params.Recipient = &recipient
+	}
+	if out.Subject != "" {
+		params.Subject = &out.Subject
+	}
+	if _, err := q.InsertNotification(ctx, params); err != nil {
+		return fmt.Errorf("insert notification: %w", err)
 	}
 	return nil
 }

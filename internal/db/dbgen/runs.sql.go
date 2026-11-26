@@ -446,6 +446,44 @@ func (q *Queries) GetWorkflowVersionByID(ctx context.Context, id pgtype.UUID) (W
 	return i, err
 }
 
+const insertNotification = `-- name: InsertNotification :one
+INSERT INTO notifications (run_id, node_id, channel, recipient, subject, payload)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, run_id, node_id, channel, recipient, subject, payload, created_at
+`
+
+type InsertNotificationParams struct {
+	RunID     pgtype.UUID `json:"run_id"`
+	NodeID    string      `json:"node_id"`
+	Channel   string      `json:"channel"`
+	Recipient *string     `json:"recipient"`
+	Subject   *string     `json:"subject"`
+	Payload   []byte      `json:"payload"`
+}
+
+func (q *Queries) InsertNotification(ctx context.Context, arg InsertNotificationParams) (Notification, error) {
+	row := q.db.QueryRow(ctx, insertNotification,
+		arg.RunID,
+		arg.NodeID,
+		arg.Channel,
+		arg.Recipient,
+		arg.Subject,
+		arg.Payload,
+	)
+	var i Notification
+	err := row.Scan(
+		&i.ID,
+		&i.RunID,
+		&i.NodeID,
+		&i.Channel,
+		&i.Recipient,
+		&i.Subject,
+		&i.Payload,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const listLatestNodeStatusesByRun = `-- name: ListLatestNodeStatusesByRun :many
 SELECT DISTINCT ON (node_id) node_id, status
 FROM step_attempts
@@ -469,6 +507,39 @@ func (q *Queries) ListLatestNodeStatusesByRun(ctx context.Context, runID pgtype.
 	for rows.Next() {
 		var i ListLatestNodeStatusesByRunRow
 		if err := rows.Scan(&i.NodeID, &i.Status); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNotificationsByRun = `-- name: ListNotificationsByRun :many
+SELECT id, run_id, node_id, channel, recipient, subject, payload, created_at FROM notifications WHERE run_id = $1 ORDER BY created_at, id
+`
+
+func (q *Queries) ListNotificationsByRun(ctx context.Context, runID pgtype.UUID) ([]Notification, error) {
+	rows, err := q.db.Query(ctx, listNotificationsByRun, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Notification
+	for rows.Next() {
+		var i Notification
+		if err := rows.Scan(
+			&i.ID,
+			&i.RunID,
+			&i.NodeID,
+			&i.Channel,
+			&i.Recipient,
+			&i.Subject,
+			&i.Payload,
+			&i.CreatedAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

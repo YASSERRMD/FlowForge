@@ -134,3 +134,11 @@ RETURNING *;
 -- name: CountPendingNodeTasks :one
 SELECT count(*) FROM scheduled_tasks
 WHERE task_type = 'execute_node' AND dedupe_key = $1 AND status = 'pending';
+
+-- name: InsertNotification :one
+INSERT INTO notifications (run_id, node_id, channel, recipient, subject, payload)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING *;
+
+-- name: ListNotificationsByRun :many
+SELECT * FROM notifications WHERE run_id = $1 ORDER BY created_at, id;
