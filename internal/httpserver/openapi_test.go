@@ -60,6 +60,8 @@ func TestOpenAPICoversImplementedRoutes(t *testing.T) {
 		{http.MethodPost, "/api/v1/workflows/{workflowID}/clone"},
 		{http.MethodPost, "/api/v1/workflows/{workflowID}/runs"},
 		{http.MethodGet, "/api/v1/runs/{runID}"},
+		{http.MethodGet, "/api/v1/runs/{runID}/context"},
+		{http.MethodGet, "/api/v1/runs/{runID}/notifications"},
 	}
 	for _, route := range implemented {
 		item := doc.Paths.Find(route.path)
