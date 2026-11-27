@@ -21,8 +21,14 @@ type fakeEngine struct {
 	lastWorkflow string
 	lastInput    json.RawMessage
 	lastKey      string
+	lastRun      string
 	err          error
 	replayed     bool
+
+	runContext    *engine.RunContextView
+	runContextErr error
+	notifications []engine.NotificationView
+	notifErr      error
 }
 
 func (f *fakeEngine) CreateRun(_ context.Context, callerID, workflowID string,
@@ -53,6 +59,22 @@ func (f *fakeEngine) GetRunDetail(_ context.Context, callerID, runID string) (*e
 		return nil, f.detailErr
 	}
 	return f.detail, nil
+}
+
+func (f *fakeEngine) GetRunContext(_ context.Context, callerID, runID string) (*engine.RunContextView, error) {
+	f.lastRun = runID
+	if f.runContextErr != nil {
+		return nil, f.runContextErr
+	}
+	return f.runContext, nil
+}
+
+func (f *fakeEngine) ListRunNotifications(_ context.Context, callerID, runID string) ([]engine.NotificationView, error) {
+	f.lastRun = runID
+	if f.notifErr != nil {
+		return nil, f.notifErr
+	}
+	return f.notifications, nil
 }
 
 func newRunServer(t *testing.T, eng EngineService) http.Handler {
@@ -183,5 +205,68 @@ func TestGetRunNotFound(t *testing.T) {
 		"/api/v1/runs/99999999-9999-9999-9999-999999999999", "", nil)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGetRunContextRoute(t *testing.T) {
+	eng := &fakeEngine{runContext: &engine.RunContextView{
+		Version: 1,
+		Trigger: json.RawMessage(`{"invoice_id":"inv-1"}`),
+		Steps:   map[string]json.RawMessage{"action-1": json.RawMessage(`{"valid":true}`)},
+	}}
+	h := newRunServer(t, eng)
+	rec := doJSON(t, h, http.MethodGet,
+		"/api/v1/runs/33333333-3333-3333-3333-333333333333/context", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if eng.lastRun != "33333333-3333-3333-3333-333333333333" {
+		t.Fatalf("run = %q", eng.lastRun)
+	}
+	var body engine.RunContextView
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Version != 1 || string(body.Trigger) != `{"invoice_id":"inv-1"}` {
+		t.Fatalf("body = %+v", body)
+	}
+	if string(body.Steps["action-1"]) != `{"valid":true}` {
+		t.Fatalf("steps = %v", body.Steps)
+	}
+}
+
+func TestGetRunContextNotFound(t *testing.T) {
+	eng := &fakeEngine{runContextErr: engine.ErrRunNotFound}
+	h := newRunServer(t, eng)
+	rec := doJSON(t, h, http.MethodGet,
+		"/api/v1/runs/33333333-3333-3333-3333-333333333333/context", "", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestListRunNotificationsRoute(t *testing.T) {
+	eng := &fakeEngine{notifications: []engine.NotificationView{{
+		ID:        "44444444-4444-4444-4444-444444444444",
+		NodeID:    "notify-1",
+		Channel:   "email",
+		Recipient: "ada@example.com",
+		Subject:   "Hello",
+		Payload:   json.RawMessage(`{"sent":true}`),
+	}}}
+	h := newRunServer(t, eng)
+	rec := doJSON(t, h, http.MethodGet,
+		"/api/v1/runs/33333333-3333-3333-3333-333333333333/notifications", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Notifications []engine.NotificationView `json:"notifications"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Notifications) != 1 || body.Notifications[0].Recipient != "ada@example.com" {
+		t.Fatalf("notifications = %+v", body.Notifications)
 	}
 }

@@ -20,6 +20,8 @@ type EngineService interface {
 	CreateRun(ctx context.Context, callerID, workflowID string,
 		input json.RawMessage, idempotencyKey string) (*engine.CreatedRun, error)
 	GetRunDetail(ctx context.Context, callerID, runID string) (*engine.RunDetail, error)
+	GetRunContext(ctx context.Context, callerID, runID string) (*engine.RunContextView, error)
+	ListRunNotifications(ctx context.Context, callerID, runID string) ([]engine.NotificationView, error)
 }
 
 // createRunRequest is the body of POST /workflows/{id}/runs. Both fields
@@ -102,6 +104,34 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	apierror.JSON(w, http.StatusOK, detail)
+}
+
+// handleGetRunContext returns the typed variable context expressions see.
+func (s *Server) handleGetRunContext(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := s.ownerOrError(w, r)
+	if !ok {
+		return
+	}
+	view, err := s.engine.GetRunContext(r.Context(), ownerID, chi.URLParam(r, "runID"))
+	if err != nil {
+		s.writeEngineError(w, r, err)
+		return
+	}
+	apierror.JSON(w, http.StatusOK, view)
+}
+
+// handleListRunNotifications returns persisted in-app notifications.
+func (s *Server) handleListRunNotifications(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := s.ownerOrError(w, r)
+	if !ok {
+		return
+	}
+	items, err := s.engine.ListRunNotifications(r.Context(), ownerID, chi.URLParam(r, "runID"))
+	if err != nil {
+		s.writeEngineError(w, r, err)
+		return
+	}
+	apierror.JSON(w, http.StatusOK, map[string]any{"notifications": items})
 }
 
 func (s *Server) writeEngineError(w http.ResponseWriter, r *http.Request, err error) {

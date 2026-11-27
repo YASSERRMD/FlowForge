@@ -378,6 +378,103 @@ func (s *Service) GetRunDetail(ctx context.Context, callerID, runID string) (*Ru
 	return detail, nil
 }
 
+// RunContextView is the read-only expression context of one run. Steps map
+// node IDs to their latest succeeded output document.
+type RunContextView struct {
+	Version int                        `json:"version"`
+	Trigger json.RawMessage            `json:"trigger"`
+	Steps   map[string]json.RawMessage `json:"steps"`
+}
+
+// GetRunContext returns the typed variable context used for expressions,
+// scoped to the run owner.
+func (s *Service) GetRunContext(ctx context.Context, callerID, runID string) (*RunContextView, error) {
+	run, err := s.ownedRun(ctx, callerID, runID)
+	if err != nil {
+		return nil, err
+	}
+	q := dbgen.New(s.pool)
+	outputs, err := q.ListSucceededStepOutputsByRun(ctx, run.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list step outputs: %w", err)
+	}
+	steps := make(map[string]json.RawMessage, len(outputs))
+	for _, o := range outputs {
+		steps[o.NodeID] = o.OutputJson
+	}
+	trigger := run.Variables
+	if len(trigger) == 0 {
+		trigger = json.RawMessage(`{}`)
+	}
+	return &RunContextView{Version: 1, Trigger: trigger, Steps: steps}, nil
+}
+
+// NotificationView is the API view of one persisted in-app notification.
+type NotificationView struct {
+	ID        string          `json:"id"`
+	NodeID    string          `json:"nodeId"`
+	Channel   string          `json:"channel"`
+	Recipient string          `json:"recipient,omitempty"`
+	Subject   string          `json:"subject,omitempty"`
+	Payload   json.RawMessage `json:"payload"`
+	CreatedAt string          `json:"createdAt"`
+}
+
+// ListRunNotifications returns the in-app notifications a run produced,
+// scoped to the run owner.
+func (s *Service) ListRunNotifications(ctx context.Context, callerID, runID string) ([]NotificationView, error) {
+	run, err := s.ownedRun(ctx, callerID, runID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := dbgen.New(s.pool).ListNotificationsByRun(ctx, run.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list notifications: %w", err)
+	}
+	out := make([]NotificationView, 0, len(rows))
+	for _, n := range rows {
+		out = append(out, NotificationView{
+			ID:        uuidOf(n.ID),
+			NodeID:    n.NodeID,
+			Channel:   n.Channel,
+			Recipient: deref(n.Recipient),
+			Subject:   deref(n.Subject),
+			Payload:   n.Payload,
+			CreatedAt: formatTS(n.CreatedAt),
+		})
+	}
+	return out, nil
+}
+
+// ownedRun loads a run and verifies the caller owns its workflow. Missing and
+// foreign runs both map to ErrRunNotFound so IDs cannot be probed.
+func (s *Service) ownedRun(ctx context.Context, callerID, runID string) (dbgen.WorkflowRun, error) {
+	rid, err := parseUUID(runID)
+	if err != nil {
+		return dbgen.WorkflowRun{}, ErrRunNotFound
+	}
+	caller, err := parseUUID(callerID)
+	if err != nil {
+		return dbgen.WorkflowRun{}, fmt.Errorf("parse caller: %w", err)
+	}
+	q := dbgen.New(s.pool)
+	run, err := q.GetRun(ctx, rid)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return dbgen.WorkflowRun{}, ErrRunNotFound
+		}
+		return dbgen.WorkflowRun{}, fmt.Errorf("load run: %w", err)
+	}
+	wf, err := q.GetWorkflow(ctx, run.WorkflowID)
+	if err != nil {
+		return dbgen.WorkflowRun{}, fmt.Errorf("load workflow: %w", err)
+	}
+	if wf.OwnerID != caller {
+		return dbgen.WorkflowRun{}, ErrRunNotFound
+	}
+	return run, nil
+}
+
 const tsLayout = "2006-01-02T15:04:05.999999999Z07:00"
 
 func formatTS(ts pgtype.Timestamptz) string {

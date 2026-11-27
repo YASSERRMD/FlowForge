@@ -81,6 +81,8 @@ func New(cfg config.Config, log *slog.Logger, opts ...Option) *Server {
 				r.With(s.requireWorkflowStore, s.requireEngine).Post("/{workflowID}/runs", s.handleCreateRun)
 			})
 			r.With(s.requireWorkflowStore, s.requireEngine).Get("/runs/{runID}", s.handleGetRun)
+			r.With(s.requireWorkflowStore, s.requireEngine).Get("/runs/{runID}/context", s.handleGetRunContext)
+			r.With(s.requireWorkflowStore, s.requireEngine).Get("/runs/{runID}/notifications", s.handleListRunNotifications)
 		})
 	})
 	s.router = r
