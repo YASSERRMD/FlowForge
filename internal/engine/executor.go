@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -46,6 +48,7 @@ const maxAttemptPayloadBytes = 256 * 1024
 type Executor struct {
 	pool    *pgxpool.Pool
 	actions *actions.Registry
+	now     func() time.Time
 }
 
 // NewExecutor builds an Executor with the default deterministic action
@@ -57,7 +60,13 @@ func NewExecutor(pool *pgxpool.Pool) *Executor {
 // NewExecutorWithActions builds an Executor with an explicit registry
 // (tests inject fakes).
 func NewExecutorWithActions(pool *pgxpool.Pool, registry *actions.Registry) *Executor {
-	return &Executor{pool: pool, actions: registry}
+	return &Executor{pool: pool, actions: registry, now: time.Now}
+}
+
+// WithClock overrides the executor clock (tests use a fixed instant).
+func (e *Executor) WithClock(now func() time.Time) *Executor {
+	e.now = now
+	return e
 }
 
 // ExecuteNode processes one execute_node task payload. Deterministic step
@@ -114,8 +123,13 @@ func (e *Executor) ExecuteNode(ctx context.Context, runID, nodeID string) error 
 		run.Status = string(RunRunning)
 	}
 
-	// Record the attempt and mark it running with its input snapshot.
-	attempt, err := e.startAttempt(ctx, q, run, node)
+	rc, err := e.buildContext(ctx, q, run)
+	if err != nil {
+		return err
+	}
+
+	// Record the attempt and mark it running with its resolved input snapshot.
+	attempt, err := e.startAttempt(ctx, q, run, node, rc)
 	if err != nil {
 		var serr *stepError
 		if errors.As(err, &serr) {
@@ -127,7 +141,7 @@ func (e *Executor) ExecuteNode(ctx context.Context, runID, nodeID string) error 
 		return err
 	}
 
-	output, execErr := e.executeNode(ctx, q, run, node, &g)
+	result, execErr := e.executeNode(ctx, run, node, rc)
 	if execErr != nil {
 		var serr *stepError
 		if !errors.As(execErr, &serr) {
@@ -139,19 +153,42 @@ func (e *Executor) ExecuteNode(ctx context.Context, runID, nodeID string) error 
 		return commitTx(tx)
 	}
 
-	if err := e.succeedStep(ctx, q, run, node, attempt, output, &g); err != nil {
+	if err := e.succeedStep(ctx, q, run, node, attempt, result, &g); err != nil {
 		return err
 	}
 	return commitTx(tx)
 }
 
-// startAttempt creates and starts the next attempt for the node, recording
-// the input snapshot (phase 08: the literal configured params; expression
-// resolution arrives in phase 09).
-func (e *Executor) startAttempt(ctx context.Context, q *dbgen.Queries,
-	run dbgen.WorkflowRun, node graph.Node) (dbgen.StepAttempt, error) {
+// buildContext assembles the expression context from the run input and the
+// latest succeeded output of each node.
+func (e *Executor) buildContext(ctx context.Context, q *dbgen.Queries,
+	run dbgen.WorkflowRun) (*graph.Context, error) {
 
-	input := attemptInput(node)
+	rc, err := graph.NewContext(run.Variables)
+	if err != nil {
+		return nil, fmt.Errorf("build run context: %w", err)
+	}
+	outputs, err := q.ListSucceededStepOutputsByRun(ctx, run.ID)
+	if err != nil {
+		return nil, fmt.Errorf("load step outputs: %w", err)
+	}
+	for _, out := range outputs {
+		if err := rc.MergeStep(out.NodeID, out.OutputJson); err != nil {
+			return nil, err
+		}
+	}
+	return rc, nil
+}
+
+// startAttempt creates and starts the next attempt for the node, recording
+// the resolved input snapshot.
+func (e *Executor) startAttempt(ctx context.Context, q *dbgen.Queries,
+	run dbgen.WorkflowRun, node graph.Node, rc *graph.Context) (dbgen.StepAttempt, error) {
+
+	input, err := attemptInput(node, rc)
+	if err != nil {
+		return dbgen.StepAttempt{}, &stepError{code: "invalid_params", message: err.Error()}
+	}
 	if len(input) > maxAttemptPayloadBytes {
 		// Corrupt configuration, not runtime data: fail the run without an
 		// attempt rather than record a poisoned input snapshot.
@@ -194,10 +231,18 @@ func (e *Executor) startAttempt(ctx context.Context, q *dbgen.Queries,
 	return attempt, nil
 }
 
-// executeNode runs the node's kind-specific behavior and returns its
-// output document.
-func (e *Executor) executeNode(ctx context.Context, _ *dbgen.Queries,
-	run dbgen.WorkflowRun, node graph.Node, _ *graph.Graph) (json.RawMessage, error) {
+// nodeResult is the outcome of one node kind: its output document, the
+// selected condition branch (empty for non-branching kinds) and an optional
+// earliest dispatch time (delay nodes).
+type nodeResult struct {
+	output json.RawMessage
+	branch string
+	runAt  pgtype.Timestamptz
+}
+
+// executeNode runs the node's kind-specific behavior and returns its result.
+func (e *Executor) executeNode(ctx context.Context, run dbgen.WorkflowRun,
+	node graph.Node, rc *graph.Context) (nodeResult, error) {
 
 	switch node.Kind {
 	case graph.KindStart:
@@ -205,21 +250,90 @@ func (e *Executor) executeNode(ctx context.Context, _ *dbgen.Queries,
 		// hands it to successors as its output.
 		var obj map[string]any
 		if err := json.Unmarshal(run.Variables, &obj); err != nil || obj == nil {
-			return nil, &stepError{code: "invalid_run_input", message: "run input is not a JSON object"}
+			return nodeResult{}, &stepError{code: "invalid_run_input", message: "run input is not a JSON object"}
 		}
-		return json.RawMessage(run.Variables), nil
+		return nodeResult{output: json.RawMessage(run.Variables)}, nil
 	case graph.KindAction:
-		return e.executeAction(ctx, node)
+		out, err := e.executeAction(ctx, node, rc)
+		return nodeResult{output: out}, err
+	case graph.KindCondition:
+		return e.executeCondition(node, rc)
+	case graph.KindDelay:
+		return e.executeDelay(node)
 	case graph.KindEnd:
 		// The end node carries no behavior; completion is decided after the
 		// attempt closes, when durable state is checked.
-		return json.RawMessage(`{}`), nil
+		return nodeResult{output: json.RawMessage(`{}`)}, nil
 	default:
-		return nil, &stepError{
+		return nodeResult{}, &stepError{
 			code:    "unsupported_node_kind",
 			message: fmt.Sprintf("%s: %s", ErrUnsupportedKind, node.Kind),
 		}
 	}
+}
+
+// conditionConfig is the persisted config of a condition node.
+type conditionConfig struct {
+	Expression string `json:"expression"`
+}
+
+// executeCondition evaluates the node expression against the run context and
+// selects the true or false branch. Evaluation is pure and side-effect free.
+func (e *Executor) executeCondition(node graph.Node, rc *graph.Context) (nodeResult, error) {
+	var cfg conditionConfig
+	if len(node.Config) > 0 {
+		if err := json.Unmarshal(node.Config, &cfg); err != nil {
+			return nodeResult{}, &stepError{code: "invalid_condition_config", message: err.Error()}
+		}
+	}
+	result, err := graph.EvaluateExpression(cfg.Expression, rc)
+	if err != nil {
+		return nodeResult{}, &stepError{code: "expression_error", message: err.Error()}
+	}
+	branch := "false"
+	if result {
+		branch = "true"
+	}
+	return nodeResult{
+		output: mustJSON(map[string]any{
+			"result":         result,
+			"branch":         branch,
+			"contextVersion": rc.Version,
+		}),
+		branch: branch,
+	}, nil
+}
+
+// delayConfig is the persisted config of a delay node.
+type delayConfig struct {
+	DurationMs int64 `json:"durationMs"`
+}
+
+// executeDelay converts a delay into a persisted wake-up time: the node
+// succeeds immediately and successors are scheduled at that instant, so no
+// worker goroutine sleeps and the wait survives restarts.
+func (e *Executor) executeDelay(node graph.Node) (nodeResult, error) {
+	var cfg delayConfig
+	if len(node.Config) > 0 {
+		if err := json.Unmarshal(node.Config, &cfg); err != nil {
+			return nodeResult{}, &stepError{code: "invalid_delay_config", message: err.Error()}
+		}
+	}
+	if cfg.DurationMs < 1 {
+		return nodeResult{}, &stepError{code: "invalid_delay_config", message: "durationMs must be >= 1"}
+	}
+	clock := e.now
+	if clock == nil {
+		clock = time.Now
+	}
+	wakeAt := clock().UTC().Add(time.Duration(cfg.DurationMs) * time.Millisecond)
+	return nodeResult{
+		output: mustJSON(map[string]any{
+			"durationMs": cfg.DurationMs,
+			"wakeAt":     wakeAt.Format(time.RFC3339Nano),
+		}),
+		runAt: pgtype.Timestamptz{Time: wakeAt, Valid: true},
+	}, nil
 }
 
 // actionConfig is the persisted config of an action node.
@@ -229,15 +343,20 @@ type actionConfig struct {
 }
 
 // executeAction runs the node's mock action through the registry. Unknown
-// types and action failures are deterministic step failures.
-func (e *Executor) executeAction(ctx context.Context, node graph.Node) (json.RawMessage, error) {
+// types and action failures are deterministic step failures. Params are
+// resolved against the run context before execution.
+func (e *Executor) executeAction(ctx context.Context, node graph.Node, rc *graph.Context) (json.RawMessage, error) {
 	var cfg actionConfig
 	if len(node.Config) > 0 {
 		if err := json.Unmarshal(node.Config, &cfg); err != nil {
 			return nil, &stepError{code: "invalid_action_config", message: err.Error()}
 		}
 	}
-	out, err := e.actions.Execute(ctx, cfg.ActionType, cfg.Params)
+	params, err := resolveParams(cfg.Params, rc)
+	if err != nil {
+		return nil, &stepError{code: "invalid_params", message: err.Error()}
+	}
+	out, err := e.actions.Execute(ctx, cfg.ActionType, params)
 	if err != nil {
 		if errors.Is(err, actions.ErrUnknownType) {
 			return nil, &stepError{code: "unknown_action", message: err.Error()}
@@ -248,12 +367,13 @@ func (e *Executor) executeAction(ctx context.Context, node graph.Node) (json.Raw
 }
 
 // succeedStep finishes the attempt, emits step.succeeded and dispatches
-// default-handle successors.
+// successors according to the node's routing (default handle, selected
+// condition branch, or delayed wake-up).
 func (e *Executor) succeedStep(ctx context.Context, q *dbgen.Queries,
 	run dbgen.WorkflowRun, node graph.Node, attempt dbgen.StepAttempt,
-	output json.RawMessage, g *graph.Graph) error {
+	result nodeResult, g *graph.Graph) error {
 
-	if len(output) > maxAttemptPayloadBytes {
+	if len(result.output) > maxAttemptPayloadBytes {
 		return e.failStep(ctx, q, run, node, attempt, &stepError{
 			code:    "output_too_large",
 			message: fmt.Sprintf("action output exceeds %d bytes", maxAttemptPayloadBytes),
@@ -262,27 +382,247 @@ func (e *Executor) succeedStep(ctx context.Context, q *dbgen.Queries,
 	if _, err := q.FinishStepAttempt(ctx, dbgen.FinishStepAttemptParams{
 		ID:         attempt.ID,
 		Status:     string(StepSucceeded),
-		OutputJson: output,
+		OutputJson: result.output,
 	}); err != nil {
 		return fmt.Errorf("finish attempt: %w", err)
 	}
-	if err := appendEvent(ctx, q, run.ID, "step.succeeded", map[string]any{
+	if node.Kind == graph.KindAction {
+		if err := persistNotification(ctx, q, run, node, result.output); err != nil {
+			return err
+		}
+	}
+	payload := map[string]any{
 		"runId":         uuidOf(run.ID),
 		"nodeId":        node.ID,
 		"attemptNumber": attempt.AttemptNumber,
-	}); err != nil {
+	}
+	if node.Kind == graph.KindCondition {
+		payload["branch"] = result.branch
+	}
+	if err := appendEvent(ctx, q, run.ID, "step.succeeded", payload); err != nil {
 		return err
 	}
 
 	if node.Kind == graph.KindEnd {
 		return e.maybeCompleteRun(ctx, q, run, node.ID)
 	}
+
+	if node.Kind == graph.KindCondition {
+		return e.routeCondition(ctx, q, run, node, result.branch, g)
+	}
+
 	for _, edge := range successorEdges(g, node.ID, "") {
-		if err := EnqueueStep(ctx, q, uuidOf(run.ID), edge.Target); err != nil {
+		if err := EnqueueStepAt(ctx, q, uuidOf(run.ID), edge.Target, result.runAt); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// persistNotification writes an auditable in-app notification for mock
+// notification actions. It never contacts an external provider.
+func persistNotification(ctx context.Context, q *dbgen.Queries,
+	run dbgen.WorkflowRun, node graph.Node, output []byte) error {
+
+	var cfg actionConfig
+	if len(node.Config) > 0 {
+		if err := json.Unmarshal(node.Config, &cfg); err != nil {
+			return nil
+		}
+	}
+	if !strings.HasPrefix(cfg.ActionType, "mock.notify.") {
+		return nil
+	}
+	var out struct {
+		Channel string `json:"channel"`
+		To      string `json:"to"`
+		Target  string `json:"target"`
+		Subject string `json:"subject"`
+	}
+	if err := json.Unmarshal(output, &out); err != nil {
+		return nil
+	}
+	channel := out.Channel
+	if channel == "" {
+		channel = "inapp"
+	}
+	recipient := out.To
+	if recipient == "" {
+		recipient = out.Target
+	}
+	params := dbgen.InsertNotificationParams{
+		RunID:   run.ID,
+		NodeID:  node.ID,
+		Channel: channel,
+		Payload: output,
+	}
+	if recipient != "" {
+		params.Recipient = &recipient
+	}
+	if out.Subject != "" {
+		params.Subject = &out.Subject
+	}
+	if _, err := q.InsertNotification(ctx, params); err != nil {
+		return fmt.Errorf("insert notification: %w", err)
+	}
+	return nil
+}
+
+// routeCondition dispatches the selected branch and propagates skips down the
+// branch that was not taken.
+func (e *Executor) routeCondition(ctx context.Context, q *dbgen.Queries,
+	run dbgen.WorkflowRun, node graph.Node, selected string, g *graph.Graph) error {
+
+	other := "false"
+	if selected == "false" {
+		other = "true"
+	}
+	for _, edge := range successorEdges(g, node.ID, selected) {
+		if err := EnqueueStep(ctx, q, uuidOf(run.ID), edge.Target); err != nil {
+			return err
+		}
+	}
+	for _, edge := range successorEdges(g, node.ID, other) {
+		if err := e.propagateSkips(ctx, q, run, g, edge.Target, "branch_not_taken"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// propagateSkips marks the subtree reachable only through an untaken branch
+// as skipped. A node is skipped only when every one of its predecessors is
+// skipped (or absent); shared join nodes stay active for the taken path.
+func (e *Executor) propagateSkips(ctx context.Context, q *dbgen.Queries,
+	run dbgen.WorkflowRun, g *graph.Graph, rootID, reason string) error {
+
+	// If the root already ran or is queued from another active path, leave
+	// it alone: that path owns the node.
+	rootKey := StepTaskDedupeKey(uuidOf(run.ID), rootID)
+	pending, err := q.CountPendingNodeTasks(ctx, rootKey)
+	if err != nil {
+		return fmt.Errorf("count pending node: %w", err)
+	}
+	if pending > 0 {
+		return nil
+	}
+	statuses, err := q.ListLatestNodeStatusesByRun(ctx, run.ID)
+	if err != nil {
+		return fmt.Errorf("load node statuses: %w", err)
+	}
+	latest := make(map[string]string, len(statuses))
+	for _, s := range statuses {
+		latest[s.NodeID] = s.Status
+	}
+	switch latest[rootID] {
+	case string(StepSucceeded), string(StepRunning), string(StepFailed), string(StepCanceled):
+		return nil
+	}
+
+	descendants := descendantsOf(g, rootID)
+	inactive := map[string]bool{rootID: true}
+
+	// Fixed point: a descendant becomes inactive when every predecessor is
+	// inactive or already skipped. This correctly keeps shared joins active.
+	for changed := true; changed; {
+		changed = false
+		for _, id := range descendants {
+			if id == rootID || inactive[id] {
+				continue
+			}
+			preds := predecessorIDs(g, id)
+			if len(preds) == 0 {
+				continue
+			}
+			allInactive := true
+			for _, pred := range preds {
+				if !inactive[pred] && latest[pred] != string(StepSkipped) {
+					allInactive = false
+					break
+				}
+			}
+			if allInactive {
+				inactive[id] = true
+				changed = true
+			}
+		}
+	}
+
+	toSkip := append([]string{rootID}, descendants...)
+	for _, id := range toSkip {
+		if !inactive[id] || latest[id] == string(StepSkipped) {
+			continue
+		}
+		if err := e.skipNode(ctx, q, run, g, id, reason); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// skipNode records one skipped attempt and its event.
+func (e *Executor) skipNode(ctx context.Context, q *dbgen.Queries,
+	run dbgen.WorkflowRun, g *graph.Graph, nodeID, reason string) error {
+
+	node, ok := findNode(g, nodeID)
+	if !ok {
+		return nil
+	}
+	next, err := q.NextAttemptNumber(ctx, dbgen.NextAttemptNumberParams{
+		RunID:  run.ID,
+		NodeID: nodeID,
+	})
+	if err != nil {
+		return fmt.Errorf("next attempt number: %w", err)
+	}
+	if _, err := q.CreateSkippedStepAttempt(ctx, dbgen.CreateSkippedStepAttemptParams{
+		RunID:         run.ID,
+		NodeID:        nodeID,
+		NodeType:      string(node.Kind),
+		AttemptNumber: next,
+		OutputJson:    mustJSON(map[string]any{"skipped": true, "reason": reason}),
+	}); err != nil {
+		return fmt.Errorf("skip attempt: %w", err)
+	}
+	if err := appendEvent(ctx, q, run.ID, "step.skipped", map[string]any{
+		"runId":    uuidOf(run.ID),
+		"nodeId":   nodeID,
+		"reason":   reason,
+		"attemptN": next,
+	}); err != nil {
+		return err
+	}
+	return nil
+}
+
+// descendantsOf returns every node reachable from rootID (excluding root).
+func descendantsOf(g *graph.Graph, rootID string) []string {
+	seen := map[string]bool{rootID: true}
+	var order []string
+	queue := []string{rootID}
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		for _, edge := range g.Edges {
+			if edge.Source != id || seen[edge.Target] {
+				continue
+			}
+			seen[edge.Target] = true
+			order = append(order, edge.Target)
+			queue = append(queue, edge.Target)
+		}
+	}
+	return order
+}
+
+func predecessorIDs(g *graph.Graph, id string) []string {
+	var preds []string
+	for _, edge := range g.Edges {
+		if edge.Target == id {
+			preds = append(preds, edge.Source)
+		}
+	}
+	return preds
 }
 
 // maybeCompleteRun finishes the run only when durable state agrees the
@@ -373,18 +713,30 @@ func (e *Executor) finishRun(ctx context.Context, q *dbgen.Queries,
 	return appendEvent(ctx, q, run.ID, "run."+string(status), payload)
 }
 
-// attemptInput snapshots the node's configured params as the attempt input.
-func attemptInput(node graph.Node) []byte {
-	var cfg struct {
-		ActionType string          `json:"actionType"`
-		Params     json.RawMessage `json:"params"`
-	}
-	if len(node.Config) > 0 {
-		if err := json.Unmarshal(node.Config, &cfg); err == nil && len(cfg.Params) > 0 {
-			return cfg.Params
+// attemptInput snapshots the node's resolved input. Actions record their
+// resolved params; conditions and delays record their configuration.
+func attemptInput(node graph.Node, rc *graph.Context) ([]byte, error) {
+	switch node.Kind {
+	case graph.KindAction:
+		var cfg actionConfig
+		if len(node.Config) > 0 {
+			if err := json.Unmarshal(node.Config, &cfg); err != nil {
+				return nil, err
+			}
 		}
+		return resolveParams(cfg.Params, rc)
+	case graph.KindCondition, graph.KindDelay:
+		if len(node.Config) == 0 {
+			return []byte(`{}`), nil
+		}
+		var obj map[string]any
+		if err := json.Unmarshal(node.Config, &obj); err != nil {
+			return nil, err
+		}
+		return json.Marshal(obj)
+	default:
+		return []byte(`{}`), nil
 	}
-	return []byte(`{}`)
 }
 
 func commitTx(tx pgx.Tx) error {

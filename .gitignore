@@ -34,3 +34,7 @@ tmp/
 .idea/
 .vscode/
 *.swp
+
+# Local build artifacts
+/api
+/worker

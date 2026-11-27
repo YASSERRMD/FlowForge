@@ -202,6 +202,9 @@ func validPath(path, ref string) string {
 		if segment == "" || !isIdentStart(segment[0]) {
 			return fmt.Sprintf("malformed reference %q: invalid path segment %q", ref, segment)
 		}
+		if unsafeSegment(segment) {
+			return fmt.Sprintf("unsafe reference %q: segment %q is forbidden", ref, segment)
+		}
 		for i := 0; i < len(segment); i++ {
 			if !isIdentChar(segment[i]) {
 				return fmt.Sprintf("malformed reference %q: invalid character in %q", ref, segment)
@@ -209,6 +212,19 @@ func validPath(path, ref string) string {
 		}
 	}
 	return ""
+}
+
+// unsafeSegment rejects path segments that only make sense for prototype
+// manipulation or runtime introspection in dynamic languages. Go maps cannot
+// be polluted this way, but rejecting them keeps the contract identical
+// across the Go and TypeScript evaluators and fails loudly instead of
+// silently resolving an attacker-controlled key.
+func unsafeSegment(segment string) bool {
+	switch segment {
+	case "__proto__", "prototype", "constructor":
+		return true
+	}
+	return false
 }
 
 type exprValueKind int

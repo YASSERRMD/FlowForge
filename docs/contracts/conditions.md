@@ -42,6 +42,18 @@ wording is produced by the Go validator (`internal/graph`) and the TypeScript
 mirror (`apps/web/lib/editor/expr.ts`); both are exercised by tests so the
 client and server always agree.
 
+## Safety
+
+Expressions are data, never code. The grammar has no function calls, no
+statement separators, no backticks and no assignment, so `eval(...)`,
+`require(...)`, SQL fragments and shell syntax cannot be expressed. Path
+segments that enable prototype manipulation in dynamic runtimes
+(`__proto__`, `prototype`, `constructor`) are rejected explicitly so the
+same expression is safe in both the Go and TypeScript evaluators. Evaluation
+is a pure function of the expression and the immutable run context: it never
+reads clocks, environment variables, files or the network.
+
+
 ## Examples
 
 ```
@@ -50,3 +62,14 @@ $steps.action-1.output.status == 200
 not ($trigger.a < 1 or $trigger.b < 2)
 $trigger.threshold <= -3.5
 ```
+
+## Branch routing and skip semantics
+
+A condition node routes to exactly one outgoing handle (`true` or `false`).
+The taken branch is dispatched normally; the untaken branch is marked
+`skipped`. Skips propagate transitively: a downstream node is skipped only
+when **every** predecessor is skipped (or the node is only reachable through
+skipped nodes). A merged node that still has one active predecessor stays
+active and runs normally, so a condition that reconverges does not silently
+drop work. Skipped attempts are terminal, carry a `branch_not_taken` reason,
+and never reserve a queue task.

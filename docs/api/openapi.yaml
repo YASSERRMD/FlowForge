@@ -524,6 +524,60 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+  /api/v1/runs/{runID}/context:
+    get:
+      tags: [runs]
+      summary: Run expression context
+      description: Typed variable context expressions see for this run — the
+        trigger input plus the latest succeeded output of each node. Scoped to
+        the workflow owner.
+      operationId: getRunContext
+      parameters:
+        - $ref: "#/components/parameters/DevUser"
+        - name: runID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Run context
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunContext"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/v1/runs/{runID}/notifications:
+    get:
+      tags: [runs]
+      summary: Run notifications
+      description: In-app notification records produced by mock notification
+        actions. No external messages are ever sent. Scoped to the workflow
+        owner.
+      operationId: listRunNotifications
+      parameters:
+        - $ref: "#/components/parameters/DevUser"
+        - name: runID
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Notifications
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
 components:
   parameters:
     DevUser:
@@ -710,6 +764,47 @@ components:
         createdAt:
           type: string
           format: date-time
+    RunContext:
+      type: object
+      required: [version, trigger, steps]
+      properties:
+        version:
+          type: integer
+        trigger:
+          type: object
+        steps:
+          type: object
+          additionalProperties:
+            type: object
+    Notification:
+      type: object
+      required: [id, nodeId, channel, payload, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        nodeId:
+          type: string
+        channel:
+          type: string
+          enum: [email, statuspage, inapp]
+        recipient:
+          type: string
+        subject:
+          type: string
+        payload:
+          type: object
+        createdAt:
+          type: string
+          format: date-time
+    NotificationList:
+      type: object
+      required: [notifications]
+      properties:
+        notifications:
+          type: array
+          items:
+            $ref: "#/components/schemas/Notification"
     RunDetail:
       type: object
       required: [id, workflowId, versionNumber, status, triggerType, variables, nodes, createdAt]

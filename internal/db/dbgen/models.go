@@ -10,6 +10,17 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type Notification struct {
+	ID        pgtype.UUID        `json:"id"`
+	RunID     pgtype.UUID        `json:"run_id"`
+	NodeID    string             `json:"node_id"`
+	Channel   string             `json:"channel"`
+	Recipient *string            `json:"recipient"`
+	Subject   *string            `json:"subject"`
+	Payload   []byte             `json:"payload"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type OutboxMessage struct {
 	ID              int64              `json:"id"`
 	Topic           string             `json:"topic"`

@@ -110,3 +110,35 @@ WHERE run_id = $1 AND status IN ('pending', 'running');
 
 -- name: GetWorkflowVersionByID :one
 SELECT * FROM workflow_versions WHERE id = $1;
+
+-- name: ListSucceededStepOutputsByRun :many
+-- Latest succeeded output per node, used to build the expression context.
+SELECT DISTINCT ON (node_id) node_id, output_json
+FROM step_attempts
+WHERE run_id = $1 AND status = 'succeeded'
+ORDER BY node_id, attempt_number DESC;
+
+-- name: ListLatestNodeStatusesByRun :many
+-- Latest attempt status per node, used by skip propagation.
+SELECT DISTINCT ON (node_id) node_id, status
+FROM step_attempts
+WHERE run_id = $1
+ORDER BY node_id, attempt_number DESC;
+
+-- name: CreateSkippedStepAttempt :one
+INSERT INTO step_attempts
+    (run_id, node_id, node_type, attempt_number, status, output_json, finished_at)
+VALUES ($1, $2, $3, $4, 'skipped', $5, now())
+RETURNING *;
+
+-- name: CountPendingNodeTasks :one
+SELECT count(*) FROM scheduled_tasks
+WHERE task_type = 'execute_node' AND dedupe_key = $1 AND status = 'pending';
+
+-- name: InsertNotification :one
+INSERT INTO notifications (run_id, node_id, channel, recipient, subject, payload)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING *;
+
+-- name: ListNotificationsByRun :many
+SELECT * FROM notifications WHERE run_id = $1 ORDER BY created_at, id;

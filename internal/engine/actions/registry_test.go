@@ -77,7 +77,15 @@ func TestDuplicateRegistrationPanics(t *testing.T) {
 
 func TestTypesAreSorted(t *testing.T) {
 	types := Default().Types()
-	if len(types) != 2 || types[0] != "mock.echo" || types[1] != "mock.fail" {
+	if len(types) != len(CatalogTypes()) || types[0] != "mock.check.address" {
 		t.Fatalf("types = %v", types)
+	}
+	for i := 1; i < len(types); i++ {
+		if types[i-1] >= types[i] {
+			t.Fatalf("types not sorted at %d: %v", i, types)
+		}
+	}
+	if !Default().Has("mock.echo") || !Default().Has("mock.fail") {
+		t.Fatal("base actions missing")
 	}
 }

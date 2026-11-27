@@ -94,6 +94,18 @@ func (q *Queries) CountActiveStepAttempts(ctx context.Context, runID pgtype.UUID
 	return count, err
 }
 
+const countPendingNodeTasks = `-- name: CountPendingNodeTasks :one
+SELECT count(*) FROM scheduled_tasks
+WHERE task_type = 'execute_node' AND dedupe_key = $1 AND status = 'pending'
+`
+
+func (q *Queries) CountPendingNodeTasks(ctx context.Context, dedupeKey string) (int64, error) {
+	row := q.db.QueryRow(ctx, countPendingNodeTasks, dedupeKey)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createRun = `-- name: CreateRun :one
 INSERT INTO workflow_runs
     (workflow_id, workflow_version_id, variables, idempotency_key, triggered_by, trigger_type)
@@ -137,6 +149,49 @@ func (q *Queries) CreateRun(ctx context.Context, arg CreateRunParams) (WorkflowR
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.RowVersion,
+	)
+	return i, err
+}
+
+const createSkippedStepAttempt = `-- name: CreateSkippedStepAttempt :one
+INSERT INTO step_attempts
+    (run_id, node_id, node_type, attempt_number, status, output_json, finished_at)
+VALUES ($1, $2, $3, $4, 'skipped', $5, now())
+RETURNING id, run_id, node_id, node_type, attempt_number, status, input_json, output_json, error_code, error_message, idempotency_token, started_at, finished_at, created_at
+`
+
+type CreateSkippedStepAttemptParams struct {
+	RunID         pgtype.UUID `json:"run_id"`
+	NodeID        string      `json:"node_id"`
+	NodeType      string      `json:"node_type"`
+	AttemptNumber int32       `json:"attempt_number"`
+	OutputJson    []byte      `json:"output_json"`
+}
+
+func (q *Queries) CreateSkippedStepAttempt(ctx context.Context, arg CreateSkippedStepAttemptParams) (StepAttempt, error) {
+	row := q.db.QueryRow(ctx, createSkippedStepAttempt,
+		arg.RunID,
+		arg.NodeID,
+		arg.NodeType,
+		arg.AttemptNumber,
+		arg.OutputJson,
+	)
+	var i StepAttempt
+	err := row.Scan(
+		&i.ID,
+		&i.RunID,
+		&i.NodeID,
+		&i.NodeType,
+		&i.AttemptNumber,
+		&i.Status,
+		&i.InputJson,
+		&i.OutputJson,
+		&i.ErrorCode,
+		&i.ErrorMessage,
+		&i.IdempotencyToken,
+		&i.StartedAt,
+		&i.FinishedAt,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -391,6 +446,110 @@ func (q *Queries) GetWorkflowVersionByID(ctx context.Context, id pgtype.UUID) (W
 	return i, err
 }
 
+const insertNotification = `-- name: InsertNotification :one
+INSERT INTO notifications (run_id, node_id, channel, recipient, subject, payload)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, run_id, node_id, channel, recipient, subject, payload, created_at
+`
+
+type InsertNotificationParams struct {
+	RunID     pgtype.UUID `json:"run_id"`
+	NodeID    string      `json:"node_id"`
+	Channel   string      `json:"channel"`
+	Recipient *string     `json:"recipient"`
+	Subject   *string     `json:"subject"`
+	Payload   []byte      `json:"payload"`
+}
+
+func (q *Queries) InsertNotification(ctx context.Context, arg InsertNotificationParams) (Notification, error) {
+	row := q.db.QueryRow(ctx, insertNotification,
+		arg.RunID,
+		arg.NodeID,
+		arg.Channel,
+		arg.Recipient,
+		arg.Subject,
+		arg.Payload,
+	)
+	var i Notification
+	err := row.Scan(
+		&i.ID,
+		&i.RunID,
+		&i.NodeID,
+		&i.Channel,
+		&i.Recipient,
+		&i.Subject,
+		&i.Payload,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const listLatestNodeStatusesByRun = `-- name: ListLatestNodeStatusesByRun :many
+SELECT DISTINCT ON (node_id) node_id, status
+FROM step_attempts
+WHERE run_id = $1
+ORDER BY node_id, attempt_number DESC
+`
+
+type ListLatestNodeStatusesByRunRow struct {
+	NodeID string `json:"node_id"`
+	Status string `json:"status"`
+}
+
+// Latest attempt status per node, used by skip propagation.
+func (q *Queries) ListLatestNodeStatusesByRun(ctx context.Context, runID pgtype.UUID) ([]ListLatestNodeStatusesByRunRow, error) {
+	rows, err := q.db.Query(ctx, listLatestNodeStatusesByRun, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListLatestNodeStatusesByRunRow
+	for rows.Next() {
+		var i ListLatestNodeStatusesByRunRow
+		if err := rows.Scan(&i.NodeID, &i.Status); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNotificationsByRun = `-- name: ListNotificationsByRun :many
+SELECT id, run_id, node_id, channel, recipient, subject, payload, created_at FROM notifications WHERE run_id = $1 ORDER BY created_at, id
+`
+
+func (q *Queries) ListNotificationsByRun(ctx context.Context, runID pgtype.UUID) ([]Notification, error) {
+	rows, err := q.db.Query(ctx, listNotificationsByRun, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Notification
+	for rows.Next() {
+		var i Notification
+		if err := rows.Scan(
+			&i.ID,
+			&i.RunID,
+			&i.NodeID,
+			&i.Channel,
+			&i.Recipient,
+			&i.Subject,
+			&i.Payload,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRunEvents = `-- name: ListRunEvents :many
 SELECT id, run_id, sequence, event_type, payload, created_at FROM run_events
 WHERE run_id = $1 AND sequence > $2
@@ -510,6 +669,39 @@ func (q *Queries) ListStepAttemptsByRun(ctx context.Context, runID pgtype.UUID) 
 			&i.FinishedAt,
 			&i.CreatedAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSucceededStepOutputsByRun = `-- name: ListSucceededStepOutputsByRun :many
+SELECT DISTINCT ON (node_id) node_id, output_json
+FROM step_attempts
+WHERE run_id = $1 AND status = 'succeeded'
+ORDER BY node_id, attempt_number DESC
+`
+
+type ListSucceededStepOutputsByRunRow struct {
+	NodeID     string `json:"node_id"`
+	OutputJson []byte `json:"output_json"`
+}
+
+// Latest succeeded output per node, used to build the expression context.
+func (q *Queries) ListSucceededStepOutputsByRun(ctx context.Context, runID pgtype.UUID) ([]ListSucceededStepOutputsByRunRow, error) {
+	rows, err := q.db.Query(ctx, listSucceededStepOutputsByRun, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSucceededStepOutputsByRunRow
+	for rows.Next() {
+		var i ListSucceededStepOutputsByRunRow
+		if err := rows.Scan(&i.NodeID, &i.OutputJson); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

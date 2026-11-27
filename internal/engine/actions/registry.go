@@ -64,12 +64,29 @@ func (r *Registry) Execute(ctx context.Context, actionType string, input json.Ra
 	return a.Execute(ctx, input)
 }
 
-// Default builds the phase-08 registry: echo for pass-through steps and
-// fail for exercising failure paths.
+// Default builds the deterministic mock catalog: pass-through and failure
+// actions plus the phase-09 business simulation catalog. Real external
+// integrations are intentionally absent.
 func Default() *Registry {
 	r := NewRegistry()
 	r.Register(Echo{})
 	r.Register(Fail{})
+	r.Register(InvoiceFetch{})
+	r.Register(InvoiceValidate{})
+	r.Register(InvoiceApprove{})
+	r.Register(InvoiceReject{})
+	r.Register(ReviewRequest{})
+	r.Register(NotifyEmail{})
+	r.Register(NotifyStatusPage{})
+	r.Register(PagerPage{})
+	r.Register(PagerEscalate{})
+	r.Register(EventEmit{})
+	r.Register(RequestLoad{})
+	r.Register(RequestFulfill{})
+	r.Register(RequestReject{})
+	r.Register(CheckInventory{})
+	r.Register(CheckCredit{})
+	r.Register(CheckAddress{})
 	return r
 }
 
